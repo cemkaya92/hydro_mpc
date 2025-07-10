@@ -29,6 +29,7 @@ setup(
         'console_scripts': [
             'motor_commander = hydro_mpc.control.motor_commander:main',
             'mpc_controller = hydro_mpc.control.mpc_controller:main',
+            'gui_launcher = hydro_mpc.gui.gui_launcher:main',
         ],
     },
 )
