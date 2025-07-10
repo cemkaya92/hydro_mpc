@@ -6,7 +6,7 @@ package_name = 'hydro_mpc'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='0.1.1',
     packages=find_packages(include=[package_name, f'{package_name}.*']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -20,7 +20,7 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='asl-simulation',
+    maintainer='Uluhan Cem Kaya',
     maintainer_email='uluhancem.kaya@uta.edu',
     description='ROS 2 PX4 control system with MPC and Offboard modes.',
     license='MIT',

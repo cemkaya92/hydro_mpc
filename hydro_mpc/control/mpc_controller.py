@@ -182,6 +182,9 @@ class MpcControllerNode(Node):
         # pitch_command =  self.pitch_p_gain*(0.0 - self.rpy[1]) + self.pitch_d_gain * (0.0 - self.omega_body[1])          
         # yaw_command =  self.yaw_p_gain*(0.0 - self.rpy[2]) + self.yaw_d_gain * (0.0 - self.omega_body[2])
 
+        # self.get_logger().info(f"p_ref= {p_ref} | diff= {np.array(p_ref) - self.pos}")
+        # self.get_logger().info(f"v_ref= {p_ref} | diff= {np.array(v_ref) - self.vel}")
+
         # self.get_logger().info(f"roll= {self.rpy[0]*180/np.pi} | diff= {(0.0 - self.rpy[0])*180/np.pi}")
         # self.get_logger().info(f"pitch= {self.rpy[1]*180/np.pi} | diff= {(0.0 - self.rpy[1])*180/np.pi}")
         # self.get_logger().info(f"yaw= {self.rpy[2]*180/np.pi} | diff= {(0.0 - self.rpy[2])*180/np.pi}")
