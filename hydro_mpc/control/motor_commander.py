@@ -58,7 +58,11 @@ class MotorCommander(Node):
         spin_dirs = [-1, 1, -1, 1]
 
         _, self.throttles_to_normalized_torques_and_thrust = ControlAllocator.generate_mixing_matrices(
+<<<<<<< HEAD
             1.0, 1.0, 1.5, angles_deg, spin_dirs
+=======
+            1.0, 1.35, 1.5, angles_deg, spin_dirs
+>>>>>>> 63f1ce2 (just before integrating Hydro part.)
         )
 
         # self.get_logger().info("[mixing_matrix] =\n" + np.array2string(mixing_matrix, precision=10, suppress_small=True))
@@ -114,7 +118,7 @@ class MotorCommander(Node):
 
         thrust_cmd = msg.data[0]
         torque_cmd = msg.data[1:4]
-        #self.get_logger().info(f"thrust= {thrust_cmd} | torque= {torque_cmd}")
+        self.get_logger().info(f"thrust= {thrust_cmd} | torque= {torque_cmd}")
 
         torque_thrust_vec = np.concatenate((torque_cmd, [thrust_cmd])).reshape((4, 1))
         omega_sq = self.torques_and_thrust_to_rotor_velocities @ torque_thrust_vec
@@ -130,7 +134,7 @@ class MotorCommander(Node):
 
         self.normalized_torque_and_thrust = self.throttles_to_normalized_torques_and_thrust @ throttles
 
-        #self.get_logger().info(f"normalized_torque_and_thrust= {self.normalized_torque_and_thrust} ")
+        self.get_logger().info(f"normalized_torque_and_thrust= {self.normalized_torque_and_thrust} ")
 
 
         # Prepare thrust message
