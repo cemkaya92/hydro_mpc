@@ -26,7 +26,7 @@ def eval_traj_docking(t):
     """
     # === Define Trajectory Parameters ===
     CRUISING_ALTITUDE = -3.0
-    DOCK_TARGET = np.array([2.0, 2.0, -0.30])
+    DOCK_TARGET = np.array([5.0, 0.0, -0.30])
 
     T_takeoff = 4.0      # Time to climb to cruising altitude
     T_hover_initial = 3.0  # Time to stabilize after takeoff

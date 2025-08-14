@@ -16,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('hydro_mpc/launch/*.py')),
         (os.path.join('share', package_name, 'config', 'sitl'), glob('hydro_mpc/config/sitl/*.yaml')),
         (os.path.join('share', package_name, 'config', 'controller'), glob('hydro_mpc/config/controller/*.yaml')),
-        (os.path.join('share', package_name, 'config', 'uav_parameters'), glob('hydro_mpc/config/uav_parameters/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'vehicle_parameters'), glob('hydro_mpc/config/vehicle_parameters/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

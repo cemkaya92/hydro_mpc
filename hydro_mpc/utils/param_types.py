@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Tuple, List
 
 @dataclass
-class UAVParams:
+class VehicleParams:
     mass: float                         # Kg
     arm_length: float                   # m
     inertia: Tuple[float, float, float] # (Ix, Iy, Iz) Kg.m^2
@@ -20,7 +20,7 @@ class UAVParams:
     zero_position_armed: float
 
 @dataclass
-class MPCParams:
+class ControlParams:
     horizon: float
     N: int
     frequency: float

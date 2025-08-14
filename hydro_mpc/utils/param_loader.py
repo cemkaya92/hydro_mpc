@@ -1,7 +1,7 @@
 import yaml
 import os
 
-from hydro_mpc.utils.param_types import UAVParams, MPCParams
+from hydro_mpc.utils.param_types import VehicleParams, ControlParams
 
 class ParamLoader:
     def __init__(self, yaml_path):
@@ -41,19 +41,19 @@ class ParamLoader:
         """Optional helper if using control_gains block."""
         return self.get("control_gains", {})
 
-    def get_mpc_params(self) -> MPCParams:
+    def get_control_params(self) -> ControlParams:
 
-        return MPCParams(
-            horizon=self.get("mpc_parameters", {}).get("horizon", 1.5),
-            N=self.get("mpc_parameters", {}).get("N", 20),
-            frequency=self.get("mpc_parameters", {}).get("frequency", 100.0),
-            Q=self.get("mpc_parameters", {}).get("Q", [40.0, 40.0, 40.0, 4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 0.5, 0.5, 0.5]),
-            R=self.get("mpc_parameters", {}).get("R", [0.1, 1.0, 1.0, 1.0])
+        return ControlParams(
+            horizon=self.get("control_parameters", {}).get("horizon", 1.5),
+            N=self.get("control_parameters", {}).get("N", 20),
+            frequency=self.get("control_parameters", {}).get("frequency", 100.0),
+            Q=self.get("control_parameters", {}).get("Q", [40.0, 40.0, 40.0, 4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 0.5, 0.5, 0.5]),
+            R=self.get("control_parameters", {}).get("R", [0.1, 1.0, 1.0, 1.0])
         )
     
-    def get_uav_params(self) -> UAVParams:
+    def get_vehicle_params(self) -> VehicleParams:
 
-        params = self.get("uav_parameters", {})
+        params = self.get("vehicle_parameters", {})
 
         required_fields = [
             'mass', 'arm_length', 'gravity', 'input_scaling',
@@ -72,7 +72,7 @@ class ParamLoader:
                 if field not in params:
                     raise ValueError(f"Missing required parameter: '{field}' in YAML file.")
 
-        return UAVParams(
+        return VehicleParams(
             mass=params['mass'],
             arm_length=params['arm_length'],
             gravity=params['gravity'],

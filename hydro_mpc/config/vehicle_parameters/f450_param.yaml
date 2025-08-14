@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    uav_parameters:
+    vehicle_parameters:
       mass: 1.7                    # Kg
       arm_length: 0.225            # m
       num_of_arms: 4

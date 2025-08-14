@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    mpc_parameters:
+    control_parameters:
         N: 15
         horizon: 1.5
         frequency: 100.0

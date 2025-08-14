@@ -77,15 +77,20 @@ class MPCSolver:
         sol = self.solver(x0=self.x_guess, p=p, lbg=self.lbg, ubg=self.ubg)
         w_opt = sol['x'].full().flatten()
 
-        # Warm start for next iteration
-        self.x_guess = w_opt
+        # Decode [X; U] from w_opt  (column-major / Fortran order!)
+        split = self.NX * (self.N + 1)
+        X_opt = w_opt[:split].reshape(self.NX, self.N + 1, order='F')  # shape: (NX, N+1)
+        U_opt = w_opt[split:].reshape(self.NU, self.N, order='F')       # shape: (NU, N)
 
-        # Extract the first optimal control action
-        u0 = w_opt[self.NX * (self.N + 1) : self.NX * (self.N + 1) + self.NU]
+        # Warm start (use full optimal vector or shift if you prefer)
+        self.x_guess = sol['x'].full()
+
+        # First optimal control to apply
+        u0 = U_opt[:, 0]
 
         if self.debug:
             print(f"\n[MPC] Solving for state x0: {np.round(x0, 2)}")
             print(f"[MPC] Reference xref: {np.round(xref, 2)}")
             print(f"[MPC] Control output: {np.round(u0, 3)}")
 
-        return u0
+        return u0, X_opt, U_opt

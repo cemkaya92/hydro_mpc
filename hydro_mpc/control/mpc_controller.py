@@ -5,12 +5,11 @@ import numpy as np
 
 from std_msgs.msg import Float32MultiArray
 from px4_msgs.msg import VehicleOdometry, TimesyncStatus
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
 
 from hydro_mpc.utils.mpc_solver import MPCSolver
 from hydro_mpc.guidance.trajectory import eval_traj_docking
-from hydro_mpc.utils.first_order_filter import FirstOrderFilter
-
-from hydro_mpc.utils.ploter import Logger
 
 from hydro_mpc.utils.param_loader import ParamLoader
 
@@ -26,33 +25,39 @@ class MpcControllerNode(Node):
     def __init__(self):
         super().__init__('mpc_controller_node')
         
-        self.declare_parameter('uav_param_file', 'crazyflie_param.yaml')
-        self.declare_parameter('mpc_param_file', 'mpc_crazyflie.yaml')
+        self.declare_parameter('vehicle_param_file', 'crazyflie_param.yaml')
+        self.declare_parameter('controller_param_file', 'mpc_crazyflie.yaml')
+        self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
+        self.declare_parameter('world_frame', 'map')
+        self.declare_parameter('trajectory_topic', '/trajectory') 
 
-        uav_param_file = self.get_parameter('uav_param_file').get_parameter_value().string_value
-        mpc_param_file = self.get_parameter('mpc_param_file').get_parameter_value().string_value
+        vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
+        controller_param_file = self.get_parameter('controller_param_file').get_parameter_value().string_value
+        sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
+        self.world_frame = self.get_parameter('world_frame').get_parameter_value().string_value
+        trajectory_topic = self.get_parameter('trajectory_topic').get_parameter_value().string_value
 
         package_dir = get_package_share_directory('hydro_mpc')
         
-        sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', 'sitl_params.yaml')
-        uav_yaml_path = os.path.join(package_dir, 'config', 'uav_parameters', uav_param_file)
-        mpc_yaml_path = os.path.join(package_dir, 'config', 'controller', mpc_param_file)
+        sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
+        vehicle_yaml_path = os.path.join(package_dir, 'config', 'vehicle_parameters', vehicle_param_file)
+        controller_yaml_path = os.path.join(package_dir, 'config', 'controller', controller_param_file)
 
 
         # Load parameters
         sitl_yaml = ParamLoader(sitl_yaml_path)
-        uav_yaml = ParamLoader(uav_yaml_path)
-        mpc_yaml = ParamLoader(mpc_yaml_path)
+        vehicle_yaml = ParamLoader(vehicle_yaml_path)
+        controller_yaml = ParamLoader(controller_yaml_path)
 
         # Topic names
         odom_topic = sitl_yaml.get_topic("odometry_topic")
         timesync_topic = sitl_yaml.get_topic("status_topic")
-        mpc_cmd_topic = sitl_yaml.get_topic("mpc_command_topic")
+        control_cmd_topic = sitl_yaml.get_topic("mpc_command_topic")
 
         # Controller parameters
-        mpc_params = mpc_yaml.get_mpc_params()
+        self.control_params = controller_yaml.get_control_params()
         # UAV parameters
-        uav_params = uav_yaml.get_uav_params()
+        self.vehicle_params = vehicle_yaml.get_vehicle_params()
 
 
 
@@ -73,12 +78,16 @@ class MpcControllerNode(Node):
             TimesyncStatus, 
             timesync_topic, 
             self.sync_callback, qos_profile)
-        #self.pub_motor = self.create_publisher(ActuatorMotors, '/fmu/in/actuator_motors', 10)
+        
         self.motor_cmd_pub = self.create_publisher(
             Float32MultiArray, 
-            mpc_cmd_topic, 
+            control_cmd_topic, 
             10)
                         
+        self.trajectory_pub = self.create_publisher(
+            Path, 
+            trajectory_topic, 
+            10)
 
         # State variables
         self.t0 = None
@@ -92,19 +101,14 @@ class MpcControllerNode(Node):
         self.rpy = np.zeros(3)
         self.omega_body = np.zeros(3) # Angular velocity in body frame
 
+        # MPC predicted path 
+        self.last_pred_X = None     # np.ndarray, shape (NX, N+1), world frame
+        self.last_ref_X  = None     # np.ndarray, shape (NX, N+1), world frame
 
-        # First-order filters for smoother control outputs
-        self.thrust_filter = FirstOrderFilter(alpha=0.8)
-        self.roll_torque_filter = FirstOrderFilter(alpha=0.5)
-        self.pitch_torque_filter = FirstOrderFilter(alpha=0.5)
-        self.yaw_torque_filter = FirstOrderFilter(alpha=0.9)
-
-        # Data logging
-        self.logger = Logger()
         
         # MPC + Timer
-        self.mpc = MPCSolver(mpc_params, uav_params, debug=False)
-        self.timer_mpc = self.create_timer(1.0 / mpc_params.frequency, self.mpc_loop)  # 100 Hz
+        self.mpc = MPCSolver(self.control_params, self.vehicle_params, debug=False)
+        self.timer_mpc = self.create_timer(1.0 / self.control_params.frequency, self.control_loop)  
 
         self.get_logger().info("MPC Controller Node initialized.")
 
@@ -151,7 +155,7 @@ class MpcControllerNode(Node):
     def sync_callback(self, msg):
         self.px4_timestamp = msg.timestamp
 
-    def mpc_loop(self):
+    def control_loop(self):
         """
         Runs at a slower rate, solving the optimization problem.
         """
@@ -165,14 +169,13 @@ class MpcControllerNode(Node):
         # Get reference trajectory point
         p_ref, v_ref = eval_traj_docking(self.t_sim)
 
-
         # Reference for attitude and angular rates is zero
         x_ref = np.concatenate([p_ref, v_ref, np.zeros(6)])
 
         # Solve the MPC problem
-        u_mpc = self.mpc.solve(x0, x_ref)  # [thrust, tau_phi, tau_theta, tau_psi]
+        u_mpc, X_opt, _ = self.mpc.solve(x0, x_ref)  # [thrust, tau_phi, tau_theta, tau_psi]
 
-        # u_mpc = np.array([0.0, 0.0, 0.0, 0.0])
+        self.last_pred_X = X_opt
 
         u_mpc[1] = -u_mpc[1]
         # u_mpc[2] = 0.0
@@ -182,21 +185,12 @@ class MpcControllerNode(Node):
         # pitch_command =  self.pitch_p_gain*(0.0 - self.rpy[1]) + self.pitch_d_gain * (0.0 - self.omega_body[1])          
         # yaw_command =  self.yaw_p_gain*(0.0 - self.rpy[2]) + self.yaw_d_gain * (0.0 - self.omega_body[2])
 
-<<<<<<< HEAD
         # self.get_logger().info(f"p_ref= {p_ref} | diff= {np.array(p_ref) - self.pos}")
         # self.get_logger().info(f"v_ref= {p_ref} | diff= {np.array(v_ref) - self.vel}")
 
         # self.get_logger().info(f"roll= {self.rpy[0]*180/np.pi} | diff= {(0.0 - self.rpy[0])*180/np.pi}")
         # self.get_logger().info(f"pitch= {self.rpy[1]*180/np.pi} | diff= {(0.0 - self.rpy[1])*180/np.pi}")
         # self.get_logger().info(f"yaw= {self.rpy[2]*180/np.pi} | diff= {(0.0 - self.rpy[2])*180/np.pi}")
-=======
-        self.get_logger().info(f"p_ref= {p_ref} | diff= {np.array(p_ref) - self.pos}")
-        self.get_logger().info(f"v_ref= {p_ref} | diff= {np.array(v_ref) - self.vel}")
-
-        self.get_logger().info(f"roll= {self.rpy[0]*180/np.pi} | diff= {(0.0 - self.rpy[0])*180/np.pi}")
-        self.get_logger().info(f"pitch= {self.rpy[1]*180/np.pi} | diff= {(0.0 - self.rpy[1])*180/np.pi}")
-        self.get_logger().info(f"yaw= {self.rpy[2]*180/np.pi} | diff= {(0.0 - self.rpy[2])*180/np.pi}")
->>>>>>> 63f1ce2 (just before integrating Hydro part.)
         #u_mpc[0] = (-np.sqrt(u_mpc[0] / (4 * KF_SIM))) / MAX_OMEGA_SIM
         # yaw_command = (yaw_command / self.max_torque)
 
@@ -211,7 +205,6 @@ class MpcControllerNode(Node):
         # u_mpc[2] = self.pitch_torque_filter.filter(pitch_command)
         # u_mpc[3] = self.yaw_torque_filter.filter(yaw_command)
 
-        self.logger.log(self.t_sim, self.pos, self.vel, self.rpy, p_ref, v_ref, u_mpc)
 
         # Normalize thrust by max_thrust
         #u_mpc[0] /= MAX_OMEGA_SIM
@@ -235,6 +228,8 @@ class MpcControllerNode(Node):
         msg.data = u_mpc.tolist()
         self.motor_cmd_pub.publish(msg)
 
+        self._publish_trajectory()
+
         # msg = VehicleRatesSetpoint()
         # msg.timestamp = self.px4_timestamp
         # msg.roll = 0.0
@@ -250,13 +245,45 @@ class MpcControllerNode(Node):
         # self.get_logger().info(f"x_dif={x_ref-x0}")
 
 
+    def _publish_trajectory(self):
+        # Decide what to draw: prefer predicted trajectory, else reference
+        X = self.last_pred_X 
+        if X is None:
+            return
+
+        xs = X[0, :]
+        ys = -X[1, :]
+        zs = -X[2, :]
+
+        msg = Path()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.world_frame
+
+        poses = []
+        for x, y, z in zip(xs, ys, zs):
+            p = PoseStamped()
+            p.header = msg.header
+            p.pose.position.x = float(x)
+            p.pose.position.y = float(y)
+            p.pose.position.z = float(z)
+
+            p.pose.orientation.x = 0.0
+            p.pose.orientation.y = 0.0
+            p.pose.orientation.z = 0.0
+            p.pose.orientation.w = 1.0
+
+            poses.append(p)
+
+        msg.poses = poses
+        self.trajectory_pub.publish(msg)
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = MpcControllerNode()
 
     def signal_handler(sig, frame):
         node.get_logger().info("Shutdown signal received. Cleaning up...")
-        node.logger.plot_logs()
         node.destroy_node()
         rclpy.shutdown()
 
