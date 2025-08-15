@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+
+
+import numpy as np
+from casadi import SX, vertcat, diag, nlpsol, reshape as cs_reshape
+
+from hydro_mpc.model.dynamics_model import build_casadi_model
+
+
+# ==================== MPC Solver Class ====================
+class MPCSolver:
+    def __init__(self, mpc_params, vehicle_params, debug=False):
+        self.N = mpc_params.N
+        self.Tf = mpc_params.horizon
+        self.dt = mpc_params.horizon / mpc_params.N
+        self.debug = debug
+
+        # === Load CasADi dynamic model with UAV params ===
+        self.f_model, self.NX, self.NU = build_casadi_model(vehicle_params)
+
+        # === Define optimization variables ===
+        X = SX.sym('X', self.NX, self.N + 1) # States over the horizon
+        U = SX.sym('U', self.NU, self.N)     # Controls over the horizon
+        P = SX.sym('P', self.NX + self.NX*(self.N + 1))  # Parameters (x0 + reference xref for all knots)
+
+        # Extract initial state and reference from parameters
+        x0_param = P[0:self.NX]
+        xref_flat = P[self.NX:]
+        XREF = cs_reshape(xref_flat, self.NX, self.N + 1)   # (NX, N+1)
+
+        # Cost Function (penalizes state error and control effort)
+        # Tuning these matrices is crucial for performance
+        Q = diag(mpc_params.Q)  
+                        # Position error
+                        # Velocity error
+                        # Attitude error
+                        # Angular rate error
+        R = diag(mpc_params.R) # Control effort (Thrust, Torques)
+        cost = 0
+        
+        # Dynamics Constraints
+        g = []
+        g.append(X[:, 0] - x0_param) # Initial state constraint
+
+        for k in range(self.N):
+            # Add to cost
+            cost += (X[:,k] - XREF[:,k]).T @ Q @ (X[:,k] - XREF[:,k])
+            cost += U[:,k].T @ R @ U[:,k]
+            
+            # Add dynamics constraint (Explicit Euler integration)
+            x_next_pred = X[:,k] + self.dt * self.f_model(X[:,k], U[:,k])
+            g.append(X[:,k+1] - x_next_pred)
+        
+        # Final state cost
+        cost += (X[:,self.N] - XREF[:,k]).T @ Q @ (X[:,self.N] - XREF[:,k])
+
+        # NLP problem setup
+        g = vertcat(*g)
+        OPT_VARS = vertcat(X.reshape((-1, 1)), U.reshape((-1, 1)))
+        nlp = {'x': OPT_VARS, 'f': cost, 'g': g, 'p': P}
+        
+        opts = {
+            'ipopt.print_level': 0,
+            'print_time': False,
+            'ipopt.tol': 1e-4,
+            'ipopt.max_iter': 100
+        }
+
+        self.solver = nlpsol('solver', 'ipopt', nlp, opts)
+        
+        # Bounds for constraints (all dynamics constraints are equality)
+        self.lbg = np.zeros(g.shape)
+        self.ubg = np.zeros(g.shape)
+        self.x_guess = np.zeros(OPT_VARS.shape)
+
+    def solve(self, x0, xref_h):
+        # xref_h expected shape: (NX, N+1)
+        p = np.concatenate([x0, xref_h.reshape(-1, order='F')])  # column-major to match CasADi
+        sol = self.solver(x0=self.x_guess, p=p, lbg=self.lbg, ubg=self.ubg)
+        w_opt = sol['x'].full().flatten()
+
+        # Decode [X; U] from w_opt  (column-major / Fortran order!)
+        split = self.NX * (self.N + 1)
+        X_opt = w_opt[:split].reshape(self.NX, self.N + 1, order='F')  # shape: (NX, N+1)
+        U_opt = w_opt[split:].reshape(self.NU, self.N, order='F')       # shape: (NU, N)
+
+        # Warm start (use full optimal vector or shift if you prefer)
+        self.x_guess = sol['x'].full()
+
+        # First optimal control to apply
+        u0 = U_opt[:, 0]
+
+        if self.debug:
+            print(f"\n[MPC] Solving for state x0: {np.round(x0, 2)}")
+            print(f"[MPC] Reference xref: {np.round(xref, 2)}")
+            print(f"[MPC] Control output: {np.round(u0, 3)}")
+
+        return u0, X_opt, U_opt

@@ -6,7 +6,7 @@ package_name = 'hydro_mpc'
 
 setup(
     name=package_name,
-    version='0.1.1',
+    version='0.2.1',
     packages=find_packages(include=[package_name, f'{package_name}.*']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -29,7 +29,8 @@ setup(
         'console_scripts': [
             'motor_commander = hydro_mpc.control.motor_commander:main',
             'mpc_controller = hydro_mpc.control.mpc_controller:main',
-            'gui_launcher = hydro_mpc.gui.gui_launcher:main',
+            'offboard_manager_node = hydro_mpc.utils.offboard_manager_node:main',
+            'gui_launcher = hydro_mpc.gui.gui_launcher:main'
         ],
     },
 )

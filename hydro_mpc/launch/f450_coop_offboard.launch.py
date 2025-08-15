@@ -72,6 +72,19 @@ def generate_launch_description():
                 'trajectory_topic': '/drone/trajectory',
                 'world_frame': 'map'
             }]
+        ),
+
+        Node(
+            package=namePackage,
+            executable='offboard_manager_node',
+            name='offboard_manager_node',
+            output='screen',
+            parameters=[{
+                'vehicle_param_file': LaunchConfiguration('vehicle_param_file'),
+                'sitl_param_file': LaunchConfiguration('sitl_param_file'),
+                'disarm_on_trip': False
+            }]
         )
+
     ])
 
