@@ -15,13 +15,14 @@ from hydro_mpc.utils.param_loader import ParamLoader
 from hydro_mpc.navigation.state_machine import NavState, NavStateMachine, NavEvents
 from hydro_mpc.navigation.trajectory_manager import TrajectoryManager
 from hydro_mpc.safety.rate_limiter import SafetyRateLimiter, RateLimitConfig
+from hydro_mpc.navigation.trajectory_manager import TrajMsg
 
 class NavigatorNode(Node):
     def __init__(self):
         super().__init__("navigator")
 
         # ------- params -------
-        self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
+        self.declare_parameter('sitl_param_file', 'sitl_params.yaml')
         self.declare_parameter('mission_param_file', 'mission.yaml')
         self.declare_parameter('command_traj_topic', '/navigator/trajectory_setpoint')
         self.declare_parameter('control_frequency', 50.0)
@@ -96,7 +97,7 @@ class NavigatorNode(Node):
 
         # publisher lives in TrajectoryManager.publish_traj(); create here:
         # (we import the class there to resolve msg type)
-        from hydro_mpc.nav.trajectory_manager import TrajMsg
+        
         self.traj_pub = self.create_publisher(TrajMsg, traj_topic, 10)
 
         # timers

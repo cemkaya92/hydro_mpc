@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 import numpy as np
 
 from std_msgs.msg import Float32MultiArray
-from px4_msgs.msg import VehicleOdometry, TimesyncStatus
+from px4_msgs.msg import VehicleOdometry, TimesyncStatus, TrajectorySetpoint6dof
 from nav_msgs.msg import Path, Odometry
 from geometry_msgs.msg import PoseStamped
 
@@ -28,13 +28,13 @@ class MpcControllerNode(Node):
         self.declare_parameter('controller_param_file', 'mpc_crazyflie.yaml')
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('world_frame', 'map')
-        self.declare_parameter('trajectory_topic', '/trajectory') 
+        self.declare_parameter('mpc_trajectory_topic', '/trajectory') 
 
         vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
         controller_param_file = self.get_parameter('controller_param_file').get_parameter_value().string_value
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
         self.world_frame = self.get_parameter('world_frame').get_parameter_value().string_value
-        trajectory_topic = self.get_parameter('trajectory_topic').get_parameter_value().string_value
+        mpc_trajectory_topic = self.get_parameter('mpc_trajectory_topic').get_parameter_value().string_value
         
         package_dir = get_package_share_directory('hydro_mpc')
         
@@ -52,7 +52,7 @@ class MpcControllerNode(Node):
         odom_topic = sitl_yaml.get_topic("odometry_topic")
         timesync_topic = sitl_yaml.get_topic("status_topic")
         control_cmd_topic = sitl_yaml.get_topic("control_command_topic")
-        target_state_topic = sitl_yaml.get_topic("target_state_topic")
+        trajectory_sub_topic = sitl_yaml.get_topic("command_traj_topic")
 
         # Controller parameters
         self.control_params = controller_yaml.get_control_params()
@@ -79,10 +79,10 @@ class MpcControllerNode(Node):
             timesync_topic, 
             self._sync_callback, qos_profile)
         
-        self.sub_target_state = self.create_subscription(
-            Odometry, 
-            target_state_topic, 
-            self._target_state_callback, qos_profile)
+        self.sub_commanded_trajectory = self.create_subscription(
+            TrajectorySetpoint6dof, 
+            trajectory_sub_topic, 
+            self._trajectory_callback, 10)
         
         # Pub
         self.motor_cmd_pub = self.create_publisher(
@@ -92,14 +92,15 @@ class MpcControllerNode(Node):
                         
         self.trajectory_pub = self.create_publisher(
             Path, 
-            trajectory_topic, 
+            mpc_trajectory_topic, 
             10)
 
         # State variables
         self.t0 = None
         self.t_sim = 0.0
         self.px4_timestamp = 0
-        self.odom_ready = False
+        self._odom_ready = False
+        self._trajectory_ready = False
 
         self.pos = np.zeros(3)
         self.vel = np.zeros(3)
@@ -111,19 +112,8 @@ class MpcControllerNode(Node):
         self.last_pred_X = None     # np.ndarray, shape (NX, N+1), world frame
         self.last_ref_X  = None     # np.ndarray, shape (NX, N+1), world frame
 
-        # Trajectory Generator
-        a_max = np.array([2.0, 2.0, 1.0])
-        self.traj_generator = MinJerkTrajectoryGenerator(a_max)
-
-        self.target_pos = None
-        self.target_vel = None
-        self.target_rpy = None
-        self.target_omega = None
-
-        self.target_pos = np.array([0.0, 0.0, -2.0])
-        self.target_vel = np.array([0.0, 0.0, 0.0])
-
-        self._target_state_received = False
+        # Trajectory 
+        self._x_ref = None
 
         self.Ts = 1.0 / self.control_params.frequency
         
@@ -135,9 +125,6 @@ class MpcControllerNode(Node):
 
         self.get_logger().info("MPC Controller Node initialized.")
 
-
-
-        self.generated = False
 
 
     def _timing(self, stamp_us):
@@ -169,12 +156,12 @@ class MpcControllerNode(Node):
         # Body-frame Angular Velocity
         self.omega_body = np.array(msg.angular_velocity)
 
-        if not self.odom_ready:
+        if not self._odom_ready:
             self.get_logger().warn("First odometry message is received...")
-            self.odom_ready = True
+            self._odom_ready = True
             return
         
-        self.odom_ready = True
+        self._odom_ready = True
 
     def _quat_to_eul(self, q_xyzw):
         # PX4: [w, x, y, z]
@@ -185,52 +172,26 @@ class MpcControllerNode(Node):
     def _sync_callback(self, msg):
         self.px4_timestamp = msg.timestamp
 
-    def _target_state_callback(self, msg):
-        #msg_time = msg.header.stamp
-        #target_frame_id = msg.header.frame_id
+    def _trajectory_callback(self, msg):
 
-        # Position
-        self.target_pos = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])
-        # Linear Velocity
-        self.target_vel = np.array([msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z])
-        # Angular Velocity
-        self.target_omega = np.array([msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z])
+        #last_traj_received_stamp = msg.timestamp
 
-        # Attitude (Quaternion to Euler)
-        _q = np.zeros(4)
-        _q[0] = msg.pose.pose.orientation.x
-        _q[1] = msg.pose.pose.orientation.y
-        _q[2] = msg.pose.pose.orientation.z
-        _q[3] = msg.pose.pose.orientation.w
+        _pos = msg.position
+        _vel = msg.velocity
+        #_acc = msg.acceleration
 
-        self.target_rpy[2],self.target_rpy[1],self.target_rpy[0] = self._quat_to_eul(_q)
+        self._x_ref = np.concatenate([_pos, _vel, np.zeros(3), np.zeros(3)]) # pos, vel, att, omega
 
+        self._trajectory_ready = True
 
-        self._target_state_received = True
     
-
-    def _update_ref_trajectory(self):
-
-
-        if all(v is not None for v in [self.target_pos, self.target_vel]):
-
-            # Construct the 12-dimensional state vector
-            _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
-
-            _current_state = np.concatenate([_x0[0:6], np.zeros(3)])
-            _target_state = np.concatenate([self.target_pos, self.target_vel, np.zeros(3)])
-
-            self.traj_generator.generate_tracking_trajectory(_current_state, _target_state)
-
-
-            self._reset_t0(self.t_sim)
 
     
     def _control_loop(self):
         """
         Runs at a slower rate, solving the optimization problem.
         """
-        if not self.odom_ready:
+        if not self._odom_ready:
             self.get_logger().warn("Waiting for odometry...")
             return
 
@@ -239,21 +200,14 @@ class MpcControllerNode(Node):
         _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
 
         
-        if not self.generated:
-            self._update_ref_trajectory()
-            self.generated = True
 
-        
-        # Get reference trajectory point
-        #p_ref, v_ref = eval_traj_docking(self.t_sim)
-        p_ref, v_ref, _ = self.traj_generator.get_ref_at_time(self.t_sim) 
+        if not self._trajectory_ready:
+            return
 
-
-        # Build reference vector for MPC (setpoint-tracking variant)
-        _xref_h = np.concatenate([p_ref, v_ref, np.zeros(6)])
+        #self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
 
         # Solve the MPC problem
-        _u_mpc, _X_opt, _ = self.mpc.solve(_x0, _xref_h)  # [thrust, tau_phi, tau_theta, tau_psi]
+        _u_mpc, _X_opt, _ = self.mpc.solve(_x0, self._x_ref)  # [thrust, tau_phi, tau_theta, tau_psi]
 
         self.last_pred_X = _X_opt
 

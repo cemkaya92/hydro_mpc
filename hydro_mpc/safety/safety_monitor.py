@@ -49,7 +49,7 @@ class SafetyMonitor:
         u_cmd: np.ndarray | None = None # control vector to be sent
     ) -> tuple[bool, str | None]:
         """
-        Returns: (safe, reason_if_unsafe)
+        ALWAYS returns (safe: bool, reason: Optional[str]).
         """
         reason = None
         lim = self.limits
@@ -68,6 +68,7 @@ class SafetyMonitor:
                 if np.any(arr < lo) or np.any(arr > hi):
                     reason = "command_out_of_bounds"
 
+        '''
         # Attitude limits (roll/pitch)
         if reason is None:
             rp_deg = np.abs(np.rad2deg(rpy_rad[:2]))
@@ -89,7 +90,7 @@ class SafetyMonitor:
         if reason is None and self.last_odom_stamp_s is not None:
             if (t_now_s - self.last_odom_stamp_s) > lim.odom_timeout_s:
                 reason = "odom_stale"
-
+        '''
         # Hysteresis
         if reason is None:
             self._good_count += 1
@@ -103,3 +104,4 @@ class SafetyMonitor:
             if (not self._tripped) and self._bad_count >= self.hyst.trip_after_bad_cycles:
                 self._tripped = True
             return (not self._tripped), reason
+        

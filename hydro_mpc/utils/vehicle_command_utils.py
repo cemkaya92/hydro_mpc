@@ -13,12 +13,37 @@ def create_arm_command(timestamp,sys_id):
     cmd.from_external = True
     return cmd
 
+def create_disarm_command(timestamp,sys_id):
+    cmd = VehicleCommand()
+    cmd.timestamp = timestamp
+    cmd.param1 = 0.0
+    cmd.command = VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
+    cmd.target_system = sys_id
+    cmd.target_component = 1
+    cmd.source_system = 1
+    cmd.source_component = 1
+    cmd.from_external = True
+    return cmd
+
 def create_offboard_mode_command(timestamp,sys_id):
     cmd = VehicleCommand()
     cmd.timestamp = timestamp
     cmd.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE
     cmd.param1 = 1.0  # PX4_CUSTOM_MAIN_MODE = OFFBOARD
     cmd.param2 = 6.0  # PX4_CUSTOM_SUB_MODE = OFFBOARD
+    cmd.target_system = sys_id
+    cmd.target_component = 1
+    cmd.source_system = 1
+    cmd.source_component = 1
+    cmd.from_external = True
+    return cmd
+
+def create_posctl_mode_command(timestamp,sys_id):
+    cmd = VehicleCommand()
+    cmd.timestamp = timestamp
+    cmd.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE
+    cmd.param1 = 1.0   # PX4 custom mode enabled
+    cmd.param2 = 4.0   # PX4_CUSTOM_MAIN_MODE_POSCTL
     cmd.target_system = sys_id
     cmd.target_component = 1
     cmd.source_system = 1

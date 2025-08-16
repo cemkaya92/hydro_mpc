@@ -3,11 +3,8 @@ from __future__ import annotations
 import math
 import numpy as np
 
-# px4 message compatibility: prefer 6DoF, fall back to TrajectorySetpoint
-try:
-    from px4_msgs.msg import TrajectorySetpoint6DoF as TrajMsg
-except Exception:
-    from px4_msgs.msg import TrajectorySetpoint as TrajMsg
+from px4_msgs.msg import TrajectorySetpoint6dof as TrajMsg
+
 
 from hydro_mpc.guidance.min_jerk_trajectory_generator import MinJerkTrajectoryGenerator
 

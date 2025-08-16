@@ -49,6 +49,12 @@ def generate_launch_description():
             description='Controller parameter file inside config/controller/'
         ),
 
+        DeclareLaunchArgument(
+            'mission_param_file',
+            default_value='utari_demo_mission_params.yaml',
+            description='Mission parameter file inside config/mission/'
+        ),
+
         Node(
             package=namePackage,
             executable='motor_commander',
@@ -82,7 +88,8 @@ def generate_launch_description():
             parameters=[{
                 'vehicle_param_file': LaunchConfiguration('vehicle_param_file'),
                 'sitl_param_file': LaunchConfiguration('sitl_param_file'),
-                'disarm_on_trip': False
+                'disarm_on_trip': False,
+                'auto_reenter_after_trip': False
             }]
         ),
 
@@ -92,7 +99,8 @@ def generate_launch_description():
             name='navigator_node',
             output='screen',
             parameters=[{
-                'mission_param_file': 'mission.yaml',
+                'sitl_param_file': LaunchConfiguration('sitl_param_file'),
+                'mission_param_file': LaunchConfiguration('mission_param_file'),
                 'control_frequency': 50.0,
                 'auto_start': True,
             }],

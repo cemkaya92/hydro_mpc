@@ -11,107 +11,18 @@ from px4_msgs.msg import (
 )
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32MultiArray
+from std_srvs.srv import SetBool, Trigger
 
 from ament_index_python.packages import get_package_share_directory
 
 # Reuse your helpers (arm/offboard) and your ParamLoader + topics
 from hydro_mpc.utils.vehicle_command_utils import (
-    create_arm_command, create_offboard_mode_command
+    create_arm_command, create_disarm_command, create_offboard_mode_command, create_posctl_mode_command
 )
 from hydro_mpc.utils.param_loader import ParamLoader
+from hydro_mpc.safety.safety_monitor import SafetyMonitor
 
-# ----------------------- small safety monitor -----------------------
-def _bad(x) -> bool:
-    if x is None:
-        return True
-    arr = np.asarray(x)
-    return not np.all(np.isfinite(arr))
 
-class SafetyLimits:
-    def __init__(
-        self,
-        max_roll_pitch_deg: float = 35.0,
-        max_rate_rad_s: float = 4.0,
-        max_pos_err_m: float = 2.0,
-        max_vel_err_mps: float = 2.0,
-        odom_timeout_s: float = 0.25,
-        cmd_bounds: tuple[float, float] | None = None,
-    ):
-        self.max_roll_pitch_deg = max_roll_pitch_deg
-        self.max_rate_rad_s = max_rate_rad_s
-        self.max_pos_err_m = max_pos_err_m
-        self.max_vel_err_mps = max_vel_err_mps
-        self.odom_timeout_s = odom_timeout_s
-        self.cmd_bounds = cmd_bounds
-
-class SafetyHysteresis:
-    def __init__(self, trip_after_bad_cycles=2, clear_after_good_cycles=20):
-        self.trip_after_bad_cycles = trip_after_bad_cycles
-        self.clear_after_good_cycles = clear_after_good_cycles
-
-class SafetyMonitor:
-    def __init__(self, limits: SafetyLimits, hyst: SafetyHysteresis):
-        self.lim = limits
-        self.hyst = hyst
-        self._bad_count = 0
-        self._good_count = 0
-        self._tripped = False
-        self.last_odom_stamp_s: float | None = None
-
-    def note_odom_stamp(self, t_s: float):
-        self.last_odom_stamp_s = t_s
-
-    def evaluate(
-        self,
-        t_now_s: float,
-        rpy_rad: np.ndarray,
-        omega_rad_s: np.ndarray,
-        pos_m: np.ndarray, vel_mps: np.ndarray,
-        p_ref_m: np.ndarray, v_ref_mps: np.ndarray,
-        u_cmd: np.ndarray | None,
-    ) -> tuple[bool, str | None]:
-        reason = None
-        if _bad([rpy_rad, omega_rad_s, pos_m, vel_mps, p_ref_m, v_ref_mps]):
-            reason = "nan_or_inf_in_state_or_ref"
-
-        if reason is None and u_cmd is not None:
-            if _bad(u_cmd):
-                reason = "nan_or_inf_in_command"
-            elif self.lim.cmd_bounds:
-                lo, hi = self.lim.cmd_bounds
-                if np.any(u_cmd < lo) or np.any(u_cmd > hi):
-                    reason = "command_out_of_bounds"
-
-        if reason is None:
-            rp_deg = np.abs(np.rad2deg(rpy_rad[:2]))
-            if np.any(rp_deg > self.lim.max_roll_pitch_deg):
-                reason = "excess_tilt"
-
-        if reason is None and np.linalg.norm(omega_rad_s) > self.lim.max_rate_rad_s:
-            reason = "excess_rate"
-
-        if reason is None:
-            if np.linalg.norm(p_ref_m - pos_m) > self.lim.max_pos_err_m:
-                reason = "position_error_too_large"
-            elif np.linalg.norm(v_ref_mps - vel_mps) > self.lim.max_vel_err_mps:
-                reason = "velocity_error_too_large"
-
-        if reason is None and self.last_odom_stamp_s is not None:
-            if (t_now_s - self.last_odom_stamp_s) > self.lim.odom_timeout_s:
-                reason = "odom_stale"
-
-        if reason is None:
-            self._good_count += 1
-            self._bad_count = 0
-            if self._tripped and self._good_count >= self.hyst.clear_after_good_cycles:
-                self._tripped = False
-            return (not self._tripped), None
-        else:
-            self._bad_count += 1
-            self._good_count = 0
-            if (not self._tripped) and self._bad_count >= self.hyst.trip_after_bad_cycles:
-                self._tripped = True
-            return (not self._tripped), reason
 
 # ----------------------- Offboard Manager Node -----------------------
 class OffboardManagerNode(Node):
@@ -120,7 +31,7 @@ class OffboardManagerNode(Node):
       - Publishes OffboardControlMode keepalive
       - Decides failsafe vs offboard based on state/refs/cmds
       - If safe: set OFFBOARD + ARM
-      - If unsafe: switch to POSCTL (and optionally disarm)
+      - If unsafe: switch to POSCTL (and optionally disarm) and LATCH (manual re-enable)
     """
     def __init__(self):
         super().__init__("offboard_manager")
@@ -129,11 +40,13 @@ class OffboardManagerNode(Node):
         self.declare_parameter('vehicle_param_file', 'crazyflie_param.yaml')
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('disarm_on_trip', False)
+        self.declare_parameter('auto_reenter_after_trip', False)  # (default: NO auto re-entry)
 
         package_dir = get_package_share_directory('hydro_mpc')
         vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
         self.disarm_on_trip = bool(self.get_parameter('disarm_on_trip').get_parameter_value().bool_value)
+        self.auto_reenter_after_trip = bool(self.get_parameter('auto_reenter_after_trip').get_parameter_value().bool_value)
 
         sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
         vehicle_yaml_path = os.path.join(package_dir, 'config', 'vehicle_parameters', vehicle_param_file)
@@ -163,6 +76,11 @@ class OffboardManagerNode(Node):
         self.create_subscription(Odometry, target_state_topic, self._target_cb, qos)
         self.create_subscription(Float32MultiArray, control_cmd_topic, self._cmd_cb, 10)
 
+        # services (to control the latch)  <-- NEW
+        self.srv_enable = self.create_service(SetBool, 'offboard_manager/enable_offboard', self._srv_enable_offboard)
+        self.srv_clear  = self.create_service(Trigger, 'offboard_manager/clear_trip', self._srv_clear_trip)
+
+
         # state
         self.t0 = None
         self.t_sim = 0.0
@@ -174,31 +92,48 @@ class OffboardManagerNode(Node):
         self.omega_body = np.zeros(3)
         self.target_pos = np.zeros(3)
         self.target_vel = np.zeros(3)
-        self.have_target = True
+        self.have_target = True # HARD-CODED FOR TESTING =======================================================
         self.have_odom = False
         self.last_cmd: np.ndarray | None = None
 
         # control flags
         self.offboard_set = False
         self.armed_once = False
-        self.failsafe_activated = False
+
+        # LATCH flags (block offboard re-entry after trip)  
+        self.trip_latched = False         # set True on failsafe trip
+        self.offboard_blocked = False     # global disable (also set on trip)
 
         # safety
-        limits = SafetyLimits(
-            max_roll_pitch_deg=35.0,
-            max_rate_rad_s=4.0,
-            max_pos_err_m=2.0,
-            max_vel_err_mps=2.0,
-            odom_timeout_s=0.25,
-            cmd_bounds=None,   # e.g. set to (-1.5, 1.5) if you want to bound torque/thrust inputs
-        )
-        self.mon = SafetyMonitor(limits, SafetyHysteresis())
+        self.mon = SafetyMonitor()
         self.get_logger().info("OffboardManagerNode initialized")
 
         # timers
         self.keepalive_timer = self.create_timer(0.2, self._publish_offboard_keepalive)  # 5 Hz
         self.safety_timer = self.create_timer(0.1, self._safety_tick)                   # 10 Hz
 
+    # ---------- services ----------
+    def _srv_enable_offboard(self, req: SetBool.Request, res: SetBool.Response):
+        if req.data:
+            self.offboard_blocked = False
+            self.trip_latched = False
+            res.success = True
+            res.message = "Offboard enabled; latch cleared."
+            self.get_logger().info(res.message)
+        else:
+            self.offboard_blocked = True
+            res.success = True
+            res.message = "Offboard disabled."
+            self.get_logger().warn(res.message)
+        return res
+
+    def _srv_clear_trip(self, req: Trigger.Request, res: Trigger.Response):
+        self.trip_latched = False
+        res.success = True
+        res.message = "Trip latch cleared."
+        self.get_logger().info(res.message)
+        return res
+    
     # ---------- callbacks ----------
     def _timing(self, stamp_us):
         t = stamp_us * 1e-6
@@ -235,25 +170,26 @@ class OffboardManagerNode(Node):
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
 
-        if not self.failsafe_activated:
-                
-            now_us = int(self.get_clock().now().nanoseconds / 1000)
-            offboard = OffboardControlMode()
-            offboard.timestamp = now_us
-            offboard.position = False
-            offboard.velocity = False
-            offboard.acceleration = False
-            offboard.attitude = False
-            offboard.body_rate = False
-            offboard.thrust_and_torque = True
-            offboard.direct_actuator = False
-            self.offboard_ctrl_pub.publish(offboard)
+        # Always safe to publish keepalive (it does not switch modes by itself)       
+        now_us = int(self.get_clock().now().nanoseconds / 1000)
+        offboard = OffboardControlMode()
+        offboard.timestamp = now_us
+        offboard.position = False
+        offboard.velocity = False
+        offboard.acceleration = False
+        offboard.attitude = False
+        offboard.body_rate = False
+        offboard.thrust_and_torque = True
+        offboard.direct_actuator = False
+        self.offboard_ctrl_pub.publish(offboard)
 
-            # If we haven't set Offboard yet, and things look ok, do it here
-            if not self.offboard_set and self.have_odom:
-                # require target + (optionally) a first cmd sample to avoid arming on junk
-                if self.have_target:
-                    self._set_offboard_and_arm(now_us)
+        # Only auto-set Offboard+Arm if not blocked/latched
+        if (not self.offboard_set
+            and not self.offboard_blocked
+            and not self.trip_latched
+            and self.have_odom
+            and self.have_target):
+            self._set_offboard_and_arm(now_us)
 
     def _safety_tick(self):
         if not (self.have_odom and self.have_target):
@@ -270,26 +206,30 @@ class OffboardManagerNode(Node):
         if safe:
             # if we lost Offboard due to a previous trip and things are good long enough,
             # you can choose to auto-reenter; here we keep it manual (offboard_set stays as is)
-            
-            # self.failsafe_activated = False
+
             return
 
-        # Unsafe -> switch to POSCTL and optionally disarm
-        self.failsafe_activated = True
+        # Unsafe -> switch to POSCTL and (optionally) disarm; then LATCH
         now_us = int(self.get_clock().now().nanoseconds / 1000)
-        self._send_posctl_mode(now_us)
+        self._set_posctl_mode(now_us)
         if self.disarm_on_trip:
             self._send_disarm(now_us)
         self.offboard_set = False  # require re-enable
 
+        # Latch and block re-entry unless user explicitly enables
+        self.trip_latched = True
+        if not self.auto_reenter_after_trip:
+            self.offboard_blocked = True
+
         if reason:
-            self.get_logger().error(f"Failsafe trip: {reason}")
+            self.get_logger().error(f"Failsafe trip: {reason} (Offboard re-entry blocked; call /offboard_manager/enable_offboard True to re-enable)")
+
 
     # ---------- mode/arm helpers ----------
     def _set_offboard_and_arm(self, now_us: int):
 
         self.get_logger().info("sending _set_offboard_and_arm.")
-        if self.offboard_set:
+        if self.offboard_set or self.offboard_blocked or self.trip_latched:
             return
         
         self.cmd_pub.publish(create_offboard_mode_command(now_us, self.sys_id))
@@ -298,31 +238,13 @@ class OffboardManagerNode(Node):
         self.armed_once = True
         self.get_logger().info("Sent OFFBOARD and ARM")
 
-    def _send_posctl_mode(self, now_us: int):
-        msg = VehicleCommand()
-        msg.timestamp = now_us
-        msg.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE
-        msg.param1 = 1.0   # PX4 custom mode enabled
-        msg.param2 = 4.0   # PX4_CUSTOM_MAIN_MODE_POSCTL
-        msg.target_system = self.sys_id
-        msg.target_component = 1
-        msg.source_system = 1
-        msg.source_component = 1
-        msg.from_external = True
-        self.cmd_pub.publish(msg)
+    def _set_posctl_mode(self, now_us: int):
+        self.cmd_pub.publish(create_posctl_mode_command(now_us, self.sys_id))
         self.get_logger().warn("Switching to POSCTL (leaving Offboard)")
 
+
     def _send_disarm(self, now_us: int):
-        msg = VehicleCommand()
-        msg.timestamp = now_us
-        msg.param1 = 0.0
-        msg.command = VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
-        msg.target_system = self.sys_id
-        msg.target_component = 1
-        msg.source_system = 1
-        msg.source_component = 1
-        msg.from_external = True
-        self.cmd_pub.publish(msg)
+        self.cmd_pub.publish(create_disarm_command(now_us, self.sys_id))
         self.get_logger().warn("Disarm sent")
 
     # ---------- utils ----------
