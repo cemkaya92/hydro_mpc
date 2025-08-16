@@ -11,14 +11,12 @@ from geometry_msgs.msg import PoseStamped
 from hydro_mpc.utils.mpc_solver import MPCSolver
 from hydro_mpc.guidance.min_jerk_trajectory_generator import MinJerkTrajectoryGenerator
 
-
 from hydro_mpc.utils.param_loader import ParamLoader
 
 from ament_index_python.packages import get_package_share_directory
 import os
 
 import signal
-
 
 
 
@@ -138,17 +136,6 @@ class MpcControllerNode(Node):
         self.get_logger().info("MPC Controller Node initialized.")
 
 
-        # Safety caps (per-axis)
-        self.err_pos_cap = np.array([0.5, 0.5, 0.5])   # meters of allowed position error into MPC
-        self.err_vel_cap = np.array([1.0, 1.0, 1.0])   # m/s  of allowed velocity error into MPC
-
-        # Rate limits (per-axis)
-        self.ref_v_cap   = np.array([1.0, 1.0, 0.5])   # m/s   max change of position reference
-        self.ref_a_cap   = np.array([2.0, 2.0, 1.0])   # m/s^2 max change of velocity reference
-
-        # Running state for slew limiter
-        self.prev_p_cmd = None
-        self.prev_v_cmd = None
 
         self.generated = False
 
@@ -220,40 +207,6 @@ class MpcControllerNode(Node):
 
 
         self._target_state_received = True
-
-    def _safe_ref(self, p_ref: np.ndarray, v_ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Clamp error vs current state and slew-limit vs previous commanded reference.
-        Returns (p_cmd, v_cmd) to pass into MPC.
-        """
-        # 1) Error clamp vs current state
-        e_p = p_ref - self.pos
-        e_v = v_ref - self.vel
-        e_p = np.clip(e_p, -self.err_pos_cap, self.err_pos_cap)
-        e_v = np.clip(e_v, -self.err_vel_cap, self.err_vel_cap)
-
-        p_cmd = self.pos + e_p
-        v_cmd = self.vel + e_v
-
-        # 2) Slew limit vs last command
-        if self.prev_p_cmd is None:
-            # First call: start from current state (no jump)
-            self.prev_p_cmd = self.pos.copy()
-            self.prev_v_cmd = self.vel.copy()
-
-        dp_max = self.ref_v_cap * self.Ts         # meters per tick
-        dv_max = self.ref_a_cap * self.Ts         # m/s per tick
-
-        dp = p_cmd - self.prev_p_cmd
-        dv = v_cmd - self.prev_v_cmd
-
-        p_cmd = self.prev_p_cmd + np.clip(dp, -dp_max, dp_max)
-        v_cmd = self.prev_v_cmd + np.clip(dv, -dv_max, dv_max)
-
-        # store for next tick
-        self.prev_p_cmd = p_cmd
-        self.prev_v_cmd = v_cmd
-        return p_cmd, v_cmd
     
 
     def _update_ref_trajectory(self):
@@ -295,11 +248,9 @@ class MpcControllerNode(Node):
         #p_ref, v_ref = eval_traj_docking(self.t_sim)
         p_ref, v_ref, _ = self.traj_generator.get_ref_at_time(self.t_sim) 
 
-        # Apply rate limiter safety 
-        p_cmd, v_cmd = self._safe_ref(p_ref, v_ref)
 
         # Build reference vector for MPC (setpoint-tracking variant)
-        _xref_h = np.concatenate([p_cmd, v_cmd, np.zeros(6)])
+        _xref_h = np.concatenate([p_ref, v_ref, np.zeros(6)])
 
         # Solve the MPC problem
         _u_mpc, _X_opt, _ = self.mpc.solve(_x0, _xref_h)  # [thrust, tau_phi, tau_theta, tau_psi]

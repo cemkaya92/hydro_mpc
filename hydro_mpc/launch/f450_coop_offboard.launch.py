@@ -84,6 +84,18 @@ def generate_launch_description():
                 'sitl_param_file': LaunchConfiguration('sitl_param_file'),
                 'disarm_on_trip': False
             }]
+        ),
+
+        Node(
+            package=namePackage,
+            executable='navigator_node',
+            name='navigator_node',
+            output='screen',
+            parameters=[{
+                'mission_param_file': 'mission.yaml',
+                'control_frequency': 50.0,
+                'auto_start': True,
+            }],
         )
 
     ])

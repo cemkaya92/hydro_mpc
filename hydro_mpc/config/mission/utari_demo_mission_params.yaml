@@ -1,0 +1,21 @@
+takeoff:
+  # Waypoint to climb to (NED: z negative for up; ENU: make z positive)
+  waypoint: [0.0, 0.0, -2.0]
+  speed: 1.0            # m/s
+
+loiter:
+  # Center of loiter (same frame as odometry)
+  center: [0.0, 0.0, -2.0]
+  radius: 1.5           # meters
+  omega: 0.5            # rad/s (angular speed around the circle)
+
+landing:
+  final_altitude: -0.1  # target z for touchdown (NED)
+  trigger_radius: 0.6   # start landing when within this distance of target [m]
+
+target:
+  timeout: 0.6          # seconds without target update => target considered lost
+
+traj:
+  a_max: [2.0, 2.0, 1.0]     # max accel used by min-jerk generator [m/s^2]
+  segment_duration: 3.0      # default segment duration [s]
