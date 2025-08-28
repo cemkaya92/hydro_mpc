@@ -138,6 +138,8 @@ class NavigatorNode(Node):
         landing_done = (self.sm.state == NavState.LANDING and
                         (self.pos[2] <= self.landing_z + 0.05) and (np.linalg.norm(self.vel) < 0.3))
 
+        self.get_logger().info(f"State: {self.sm.state} | at_takeoff: {at_takeoff}: {np.linalg.norm(self.pos - self.takeoff_wp)}: {np.linalg.norm(self.vel)}")
+
         ev = NavEvents(
             have_odom=self.odom_ready,
             auto_start=self.auto_start,

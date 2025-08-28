@@ -5,11 +5,11 @@ import numpy as np
 
 from std_msgs.msg import Float32MultiArray
 from px4_msgs.msg import VehicleOdometry, TimesyncStatus, TrajectorySetpoint6dof
-from nav_msgs.msg import Path, Odometry
+from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 
 from hydro_mpc.utils.mpc_solver import MPCSolver
-from hydro_mpc.guidance.min_jerk_trajectory_generator import MinJerkTrajectoryGenerator
+
 
 from hydro_mpc.utils.param_loader import ParamLoader
 
