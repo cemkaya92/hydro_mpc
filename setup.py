@@ -6,7 +6,7 @@ package_name = 'hydro_mpc'
 
 setup(
     name=package_name,
-    version='0.2.1',
+    version='0.2.2',
     packages=find_packages(include=[package_name, f'{package_name}.*']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -18,6 +18,7 @@ setup(
         (os.path.join('share', package_name, 'config', 'controller'), glob('hydro_mpc/config/controller/*.yaml')),
         (os.path.join('share', package_name, 'config', 'mission'), glob('hydro_mpc/config/mission/*.yaml')),
         (os.path.join('share', package_name, 'config', 'vehicle_parameters'), glob('hydro_mpc/config/vehicle_parameters/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'perception'), glob('hydro_mpc/config/perception/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -32,7 +33,10 @@ setup(
             'mpc_controller = hydro_mpc.control.mpc_controller:main',
             'offboard_manager_node = hydro_mpc.utils.offboard_manager_node:main',
             'navigator_node = hydro_mpc.navigation.navigator_node:main',
-            'gui_launcher = hydro_mpc.gui.gui_launcher:main'
+            'gui_launcher = hydro_mpc.gui.gui_launcher:main',
+            'yolo_detector = hydro_mpc.perception.yolo_detector_node:main',
+            'aruco_detector = hydro_mpc.perception.aruco_detector_node:main',
+            'ekf_fuser = hydro_mpc.perception.ekf_fuser_node:main'
         ],
     },
 )

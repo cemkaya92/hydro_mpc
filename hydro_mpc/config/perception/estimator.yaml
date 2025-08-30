@@ -1,0 +1,37 @@
+/**:
+  ros__parameters:
+    # EKF fuser parameters
+    perception:
+      ekf_fuser:
+        q_pos: 0.02
+        q_vel: 0.10
+        q_yaw: 0.05
+        gate_NIS: 109.21
+        publish_tf: true
+        parent_frame: "drone/base_link"
+        child_frame: "rover/base_link"
+        camera_optical_frame: "drone/camera_optical_frame"
+        use_tag_yaw: true
+        yaw_meas_std: 0.10
+        base_is_frd: true
+        publish_rate_hz: 30.0
+        predict_when_idle: true
+        prediction_timeout_sec: 3.0
+        stop_publish_after_timeout: true
+        cov_inflation_rate_per_s: 0.5     # gentle growth per second
+        pos_var_floor: 0.04               # 0.2 m σ → 0.04 m²
+        yaw_var_floor: 0.03               # ~10° σ → 0.03 rad²
+        unreliable_pos_var: 2.25          # 1.5 m σ when stale
+        unreliable_yaw_var: 0.62          # ~45° σ when stale
+        max_inflation_age_sec: 3.0
+        max_variance_cap: 1e3
+        extrinsics:
+          T_uav_base_cam:
+            R: [0.0, -0.8660254,  0.5,
+                1.0,  0.0,        0.0,
+                0.0,  0.5,        0.8660254 ]
+          T_tag_rover:
+            R: [1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0]
+            t: [0.0, 0.0, 0.40]

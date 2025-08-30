@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    # YOLO detector parameters (Ultralytics/Torch by default)
+    perception:
+      yolo_detector:
+        backend: "torch"          # torch|ort|trt (stubs for ort/trt)
+        model_path: "/home/asl-simulation/ros2_ws/src/hydro_mpc/hydro_mpc/perception/models/gz_rover.pt"            # path to your YOLOv8 .pt model
+        class_name: "rover"
+        score_thresh: 0.5
+        nms_thresh: 0.50
+        input_size: [1920, 1080]
+        plate_size_m: 0.60
+        yolo_depth_scale: 1.25
+        camera_optical_frame: "drone/camera_optical_frame"
+        publish_debug: true
+        overlay.base_is_frd: true
+        overlay.show: true
+        overlay.thickness: 2
+        overlay.font_scale: 0.7
+        torch_device: "cuda:0"
+        torch_half: true
+        imgsz: 320
+        max_det: 3
+
+
+
