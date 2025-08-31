@@ -18,6 +18,7 @@
         predict_when_idle: true
         prediction_timeout_sec: 3.0
         stop_publish_after_timeout: true
+        reset_on_timeout: true
         cov_inflation_rate_per_s: 0.5     # gentle growth per second
         pos_var_floor: 0.04               # 0.2 m σ → 0.04 m²
         yaw_var_floor: 0.03               # ~10° σ → 0.03 rad²

@@ -46,6 +46,7 @@ class EkfFuserNode(Node):
             (f'{ns}.predict_when_idle', True),
             (f'{ns}.prediction_timeout_sec', 3.0),
             (f'{ns}.stop_publish_after_timeout', True),
+            (f'{ns}.reset_on_timeout', True),
             # covariance inflation & floors (variances = σ²)
             (f'{ns}.cov_inflation_rate_per_s', 0.5),   # scales P ∝ (1 + γ·age)^2
             (f'{ns}.pos_var_floor', 0.04),             # min pos var (m²) when “fresh”  (e.g., 0.2 m σ → 0.04 m²)
@@ -94,6 +95,7 @@ class EkfFuserNode(Node):
         self.R_tag_rover = R_tr 
 
         self.is_estimation_reliable = False
+        self._timed_out_prev = False   # edge-detect timeout → only reset once per timeout window
 
         self._infl_age_prev = 0.0
 
@@ -291,6 +293,15 @@ class EkfFuserNode(Node):
         stamp_now = TimeMsg(sec=sec, nanosec=nsec)
         self._set_reliability(reliable, stamp_now)
 
+        # On first detection of timeout, optionally reset the EKF and hold invalid flag
+        if (not reliable):
+            if bool(self.get_parameter(f'{self.ns}.reset_on_timeout').value) and (not self._timed_out_prev):
+                self._reset_filter("no fresh measurements (timeout)")
+            self._timed_out_prev = True
+        else:
+            # back to healthy streaming; clear the edge flag
+            self._timed_out_prev = False
+
         # Optionally stop publishing pose after timeout
         stop_after = bool(self.get_parameter(f'{self.ns}.stop_publish_after_timeout').value)
         if (not reliable) and stop_after:
@@ -349,6 +360,7 @@ class EkfFuserNode(Node):
         self.t_last_meas = t
         self._infl_age_prev = 0.0
         self._set_reliability(True, stamp)
+        self._timed_out_prev = False  # we have a fresh accepted measurement again
         self.publish(stamp)
         
     def _symmetrize_clip(self):
@@ -373,6 +385,22 @@ class EkfFuserNode(Node):
                             yaw_var_unrel])
             self._symmetrize_clip()
 
+    def _reset_filter(self, reason: str = "timeout"):
+        """Reset state & covariance to a conservative baseline."""
+        self.get_logger().warn(f"EKF reset due to {reason}.")
+        # zero state, conservative covariance (unreliable variances for pos/yaw)
+        pos_var_unrel = float(self.get_parameter(f'{self.ns}.unreliable_pos_var').value)
+        yaw_var_unrel = float(self.get_parameter(f'{self.ns}.unreliable_yaw_var').value)
+        self.x = np.zeros((7, 1))
+        self.P = np.diag([pos_var_unrel, pos_var_unrel, pos_var_unrel,
+                          1.0, 1.0, 1.0,
+                          yaw_var_unrel])
+        self._symmetrize_clip()
+        self._infl_age_prev = 0.0
+        # mark estimate invalid until we accept a fresh measurement
+        self.is_estimation_reliable = False
+        # treat as if we never had a valid measurement
+        self.t_last_meas = None
 
 def main(args=None):
     rclpy.init(args=args)

@@ -3,7 +3,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import numpy as np
 
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, UInt8
 from px4_msgs.msg import VehicleOdometry, TimesyncStatus, TrajectorySetpoint6dof
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
@@ -53,6 +53,7 @@ class MpcControllerNode(Node):
         timesync_topic = sitl_yaml.get_topic("status_topic")
         control_cmd_topic = sitl_yaml.get_topic("control_command_topic")
         trajectory_sub_topic = sitl_yaml.get_topic("command_traj_topic")
+        nav_state_topic = sitl_yaml.get_topic("nav_state_topic")
 
         # Controller parameters
         self.control_params = controller_yaml.get_control_params()
@@ -66,6 +67,13 @@ class MpcControllerNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
+        )
+
+        plan_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,  # <-- ask for the stored last sample
         )
 
         # Sub
@@ -83,6 +91,11 @@ class MpcControllerNode(Node):
             TrajectorySetpoint6dof, 
             trajectory_sub_topic, 
             self._trajectory_callback, 10)
+        
+        self.sub_nav_state = self.create_subscription(
+            UInt8, 
+            nav_state_topic, 
+            self._on_nav_state, plan_qos)
         
         # Pub
         self.motor_cmd_pub = self.create_publisher(
@@ -115,27 +128,22 @@ class MpcControllerNode(Node):
         # Trajectory 
         self._x_ref = None
 
-        self.Ts = 1.0 / self.control_params.frequency
+        self.plan_type = None
+        self.plan_t0_us = None
+        self.plan_data = {}     # dict: coeffs/state0/speed/yaw_rate/heading/duration/repeat/distance
+ 
+        self.nav_state = 1  # IDLE by default
         
         # MPC + Timer
+        self.Ts = 1.0 / self.control_params.frequency
         self.mpc = MPCSolver(self.control_params, self.vehicle_params, debug=False)
         self.timer_mpc = self.create_timer(self.Ts, self._control_loop)  
 
-        #self.timer_traj_update = self.create_timer(1.0, self._update_ref_trajectory)
 
         self.get_logger().info("MPC Controller Node initialized.")
 
-
-
-    def _timing(self, stamp_us):
-        t = stamp_us * 1e-6
-        if self.t0 is None:
-            self.t0 = t
-        return t - self.t0
     
-    def _reset_t0(self, t_now):
-        self.t0 = t_now
-
+    # ---------- callbacks ----------
     def _odom_callback(self, msg):
         self.px4_timestamp = msg.timestamp
         t_now = self._timing(msg.timestamp)
@@ -163,12 +171,6 @@ class MpcControllerNode(Node):
         
         self._odom_ready = True
 
-    def _quat_to_eul(self, q_xyzw):
-        # PX4: [w, x, y, z]
-        from scipy.spatial.transform import Rotation as R
-        _r = R.from_quat([q_xyzw[1], q_xyzw[2], q_xyzw[3], q_xyzw[0]])
-        return _r.as_euler('ZYX', degrees=False)
-
     def _sync_callback(self, msg):
         self.px4_timestamp = msg.timestamp
 
@@ -184,9 +186,13 @@ class MpcControllerNode(Node):
 
         self._trajectory_ready = True
 
-    
+    def _on_nav_state(self, msg: UInt8):
+        self.nav_state = int(msg.data)
+        if self.nav_state == 0:          # 0 = IDLE
+            self._trajectory_ready = False
+            
 
-    
+    # ---------- main loop ----------
     def _control_loop(self):
         """
         Runs at a slower rate, solving the optimization problem.
@@ -200,8 +206,11 @@ class MpcControllerNode(Node):
         _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
 
         
-
-        if not self._trajectory_ready:
+        if not self._trajectory_ready and self.nav_state != 2:
+            # publish hold/zero command and bail
+            msg = Float32MultiArray(); 
+            msg.data = [0.0, 0.0, 0.0, 0.0]
+            self.motor_cmd_pub.publish(msg)
             return
 
         #self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
@@ -228,8 +237,6 @@ class MpcControllerNode(Node):
         self._publish_trajectory()
 
 
-
-
     def _publish_trajectory(self):
         # Decide what to draw: prefer predicted trajectory, else reference
         X = self.last_pred_X 
@@ -240,28 +247,83 @@ class MpcControllerNode(Node):
         ys = -X[1, :]
         zs = -X[2, :]
 
+        # If state includes attitude (roll, pitch, yaw), pull them out
+        have_att = X.shape[0] >= 9
+        if have_att:
+            rolls  = X[6, :]
+            pitchs = X[7, :]
+            yaws   = X[8, :]
+
         msg = Path()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.world_frame
 
         poses = []
-        for x, y, z in zip(xs, ys, zs):
+
+        if have_att:
+            it = zip(xs, ys, zs, rolls, pitchs, yaws)
+        else:
+            it = zip(xs, ys, zs)
+
+        for item in it:
+            if have_att:
+                x, y, z, r, p, yy = item
+            else:
+                x, y, z = item
+
             p = PoseStamped()
             p.header = msg.header
             p.pose.position.x = float(x)
             p.pose.position.y = float(y)
             p.pose.position.z = float(z)
 
-            p.pose.orientation.x = 0.0
-            p.pose.orientation.y = 0.0
-            p.pose.orientation.z = 0.0
-            p.pose.orientation.w = 1.0
+            if have_att:
+                qx, qy, qz, qw = self._rpy_to_quat_map(r, p, yy)
+                p.pose.orientation.x = float(qx)
+                p.pose.orientation.y = float(qy)
+                p.pose.orientation.z = float(qz)
+                p.pose.orientation.w = float(qw)
+            else:
+                # Fallback: identity orientation
+                p.pose.orientation.x = 0.0
+                p.pose.orientation.y = 0.0
+                p.pose.orientation.z = 0.0
+                p.pose.orientation.w = 1.0
 
             poses.append(p)
 
         msg.poses = poses
         self.trajectory_pub.publish(msg)
 
+
+    # ---------- helpers ----------
+    def _timing(self, stamp_us):
+        t = stamp_us * 1e-6
+        if self.t0 is None:
+            self.t0 = t
+        return t - self.t0
+    
+    def _reset_t0(self, t_now):
+        self.t0 = t_now
+
+    def _quat_to_eul(self, q_xyzw):
+        # PX4: [w, x, y, z]
+        from scipy.spatial.transform import Rotation as R
+        _r = R.from_quat([q_xyzw[1], q_xyzw[2], q_xyzw[3], q_xyzw[0]])
+        return _r.as_euler('ZYX', degrees=False)
+    
+    def _rpy_to_quat_map(self, roll: float, pitch: float, yaw: float):
+        """
+        Convert MPC RPY to a quaternion consistent with the position mapping:
+        positions use (x, -y, -z), which equals a 180° rotation about X.
+        Under this change of basis: roll -> roll, pitch -> -pitch, yaw -> -yaw.
+        Returns [x,y,z,w] for geometry_msgs orientation fields.
+        """
+        from scipy.spatial.transform import Rotation as R
+        r = float(roll)
+        p = float(-pitch)
+        y = float(-yaw)
+        return R.from_euler('ZYX', [y, p, r]).as_quat()  # SciPy returns [x,y,z,w]
 
 def main(args=None):
     rclpy.init(args=args)
