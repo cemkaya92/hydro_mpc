@@ -20,7 +20,7 @@ import signal
 
 
 
-class MpcControllerNode(Node):
+class ControllerNode(Node):
     def __init__(self):
         super().__init__('mpc_controller_node')
         
@@ -327,7 +327,7 @@ class MpcControllerNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MpcControllerNode()
+    node = ControllerNode()
 
     def signal_handler(sig, frame):
         node.get_logger().info("Shutdown signal received. Cleaning up...")

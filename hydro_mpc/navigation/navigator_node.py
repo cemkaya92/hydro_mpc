@@ -7,15 +7,19 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from typing import Optional
 
-from px4_msgs.msg import VehicleOdometry
+from px4_msgs.msg import VehicleOdometry, VehicleStatus, VehicleCommandAck
 from nav_msgs.msg import Odometry
+from std_srvs.srv import Trigger
+from std_msgs.msg import UInt8
+from custom_offboard_msgs.msg import SafetyTrip
+
 from ament_index_python.packages import get_package_share_directory
 
 from hydro_mpc.utils.param_loader import ParamLoader
 from hydro_mpc.navigation.state_machine import NavState, NavStateMachine, NavEvents
-from hydro_mpc.navigation.trajectory_manager import TrajectoryManager
 from hydro_mpc.safety.rate_limiter import SafetyRateLimiter, RateLimitConfig
-from hydro_mpc.navigation.trajectory_manager import TrajMsg
+from hydro_mpc.navigation.trajectory_manager import TrajectoryManager, TrajMsg
+
 
 class NavigatorNode(Node):
     def __init__(self):
@@ -47,7 +51,11 @@ class NavigatorNode(Node):
         traj_topic = sitl_yaml.get_topic("command_traj_topic")
         odom_topic = sitl_yaml.get_topic("odometry_topic")
         target_topic = sitl_yaml.get_topic("target_state_topic", default="/target/odom")
+        status_topic = sitl_yaml.get_topic("status_topic")
+        command_ack_topic = sitl_yaml.get_topic("vehicle_command_ack_topic")
+        nav_state_topic = sitl_yaml.get_topic("nav_state_topic")
 
+        '''
         # Mission config
         takeoff_wp = np.array(mission_yaml.get_nested(["takeoff","waypoint"], [0.0,0.0,-2.0]), float)
         self.takeoff_speed = float(mission_yaml.get_nested(["takeoff","speed"], 1.0))
@@ -59,6 +67,10 @@ class NavigatorNode(Node):
         self.target_timeout = float(mission_yaml.get_nested(["target","timeout"], 0.6))
         a_max = np.array(mission_yaml.get_nested(["traj","a_max"], [2.0,2.0,1.0]), float)
         default_T = float(mission_yaml.get_nested(["traj","segment_duration"], 3.0))
+        '''
+
+        # Mission config
+        self.mission = mission_yaml.get_mission()
 
         # ------- components -------
         self.sm = NavStateMachine()
@@ -85,6 +97,9 @@ class NavigatorNode(Node):
         self.target_vel: Optional[np.ndarray] = None
         self.t_last_target: Optional[float] = None
 
+        self.emergency_latched: bool = False
+        self.trip_reason: str | None = None
+
         # ------- IO -------
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -92,8 +107,16 @@ class NavigatorNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
+        trip_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=1
+        )
+        
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos)
         self.create_subscription(Odometry, target_topic, self._target_cb, qos)
+        self.create_subscription(SafetyTrip, 'safety/trip', self._on_trip, trip_qos)
 
         # publisher lives in TrajectoryManager.publish_traj(); create here:
         # (we import the class there to resolve msg type)
@@ -123,9 +146,25 @@ class NavigatorNode(Node):
                                     msg.twist.twist.linear.z], float)
         self.t_last_target = self.t_sim
 
+    # ---- safety trip -> EMERGENCY ----
+    def _on_trip(self, msg: SafetyTrip):
+        if msg.tripped:
+            self.emergency_latched = True
+            self.trip_reason = msg.reason
+            self.sm.reset(NavState.EMERGENCY)
+            self.get_logger().error(f"Navigator entering EMERGENCY: {self.trip_reason}")
+        else:
+            # optional: clear EMERGENCY latch if you want automatic recovery logic here
+            self.emergency_latched = False
+            self.trip_reason = None
+
+
     # ---------- main loop ----------
     def _tick(self):
         if not self.odom_ready:
+            return
+        # EMERGENCY: stop sending new trajectories; hold position
+        if self.emergency_latched:
             return
 
         # events

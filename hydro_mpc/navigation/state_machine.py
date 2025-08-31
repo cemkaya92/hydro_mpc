@@ -9,6 +9,7 @@ class NavState(Enum):
     LOITER = auto()
     FOLLOW_TARGET = auto()
     LANDING = auto()
+    EMERGENCY = auto()
 
 @dataclass
 class NavEvents:

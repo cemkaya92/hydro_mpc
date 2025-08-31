@@ -68,7 +68,7 @@ class SafetyMonitor:
                 if np.any(arr < lo) or np.any(arr > hi):
                     reason = "command_out_of_bounds"
 
-        '''
+        
         # Attitude limits (roll/pitch)
         if reason is None:
             rp_deg = np.abs(np.rad2deg(rpy_rad[:2]))
@@ -79,18 +79,20 @@ class SafetyMonitor:
         if reason is None and np.linalg.norm(omega_rad_s) > lim.max_rate_rad_s:
             reason = "excess_rate"
 
+        '''
         # Tracking blow-up
         if reason is None:
             if np.linalg.norm(p_ref_m - pos_m) > lim.max_pos_err_m:
                 reason = "position_error_too_large"
             elif np.linalg.norm(v_ref_mps - vel_mps) > lim.max_vel_err_mps:
                 reason = "velocity_error_too_large"
-
+        '''
+        
         # Staleness
         if reason is None and self.last_odom_stamp_s is not None:
             if (t_now_s - self.last_odom_stamp_s) > lim.odom_timeout_s:
                 reason = "odom_stale"
-        '''
+        
         # Hysteresis
         if reason is None:
             self._good_count += 1
