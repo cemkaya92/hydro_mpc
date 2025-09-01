@@ -209,7 +209,7 @@ class OffboardManagerNode(Node):
         self.pos = np.array(msg.position, dtype=float)
         self.vel = np.array(msg.velocity, dtype=float)
         self.q = np.array([msg.q[0], msg.q[1], msg.q[2], msg.q[3]], dtype=float)  # w,x,y,z
-        self.rpy = self._quat_to_eul(self.q)
+        self.rpy[2],self.rpy[1],self.rpy[0] = self._quat_to_eul(self.q)
         self.omega_body = np.array(msg.angular_velocity, dtype=float)
 
         self.mon.note_odom_stamp(msg.timestamp * 1e-6)
@@ -289,6 +289,8 @@ class OffboardManagerNode(Node):
             # you can choose to auto-reenter; here we keep it manual (offboard_set stays as is)
 
             return
+        
+        self.get_logger().error(f"self.rpy: {self.rpy} | lim: {self.mon.limits.max_roll_pitch_deg}")
 
         # Unsafe -> switch to POSCTL and (optionally) disarm; then LATCH
         now_us = int(self.get_clock().now().nanoseconds / 1000)

@@ -164,15 +164,15 @@ class TrajectoryGenerator:
     # -------------------- New: 4D minimum-jerk pose-to --------------------
     def generate_minimum_jerk_pose_to(self,
                                       state_current: np.ndarray,
-                                      target_pose: np.ndarray,
+                                      target_state: np.ndarray,
                                       duration: Optional[float] = None,
                                       repeat: str = "none",
                                       post_behavior: str = "hold"):
         """
         Quintic min-jerk from current (p,v,a) -> target (p,v,a) in 4D (x,y,z,psi).
         Accepts:
-          - target_pose shape (4,)  => final p only, with zero final v,a
-          - target_pose shape (12,) => full final [p v a]
+          - target_state shape (4,)  => final p only, with zero final v,a
+          - target_state shape (12,) => full final [p v a]
         Yaw is wrapped to the nearest equivalent angle.
         """
         # Current state (support legacy shapes)
@@ -186,17 +186,17 @@ class TrajectoryGenerator:
             v0 = np.zeros(4); a0 = np.zeros(4)
 
         # Target interpretation
-        if target_pose.size == 4:
-            pf = target_pose.astype(float)
+        if target_state.size == 4:
+            pf = target_state.astype(float)
             pf[3] = p0[3] + self._wrap_to_pi(pf[3] - p0[3])
             vf = np.zeros(4); af = np.zeros(4)
-        elif target_pose.size == 12:
-            pf = target_pose[0:4].astype(float)
-            vf = target_pose[4:8].astype(float)
-            af = target_pose[8:12].astype(float)
+        elif target_state.size == 12:
+            pf = target_state[0:4].astype(float)
+            vf = target_state[4:8].astype(float)
+            af = target_state[8:12].astype(float)
             pf[3] = p0[3] + self._wrap_to_pi(pf[3] - p0[3])
         else:
-            raise ValueError("target_pose must be shape (4,) or (12,)")
+            raise ValueError("target_state must be shape (4,) or (12,)")
 
         # === pick duration ===
         if duration is None:

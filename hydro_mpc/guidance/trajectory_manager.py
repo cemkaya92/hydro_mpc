@@ -46,14 +46,14 @@ class TrajectoryManager:
         self,
         t_now: float,
         state0_12: np.ndarray,            # [p(4), v(4), a(4)]
-        target_pose: np.ndarray,          # (4,) or full (12,)
+        target0_12: np.ndarray,          # (4,) or full (12,)
         duration: Optional[float] = None, # None => auto-T search
         repeat: str = "none",
         post_behavior: str = "hold",
     ) -> None:
         self.gen.generate_minimum_jerk_pose_to(
             state_current=np.asarray(state0_12, float).reshape(-1),
-            target_pose=np.asarray(target_pose, float).reshape(-1),
+            target_state=np.asarray(target0_12, float).reshape(-1),
             duration=duration,
             repeat=repeat,
             post_behavior=post_behavior,

@@ -75,6 +75,8 @@ class SafetyMonitor:
             if np.any(rp_deg > lim.max_roll_pitch_deg):
                 reason = "excess_tilt"
 
+                
+
         # Rate limits
         if reason is None and np.linalg.norm(omega_rad_s) > lim.max_rate_rad_s:
             reason = "excess_rate"
