@@ -122,7 +122,7 @@ class MotorCommander(Node):
     def _on_nav_state(self, msg: UInt8):
         #is_idle = int(self.get_parameter('idle_nav_state').get_parameter_value().integer_value)
         self.nav_state = int(msg.data)
-        self.allow_commands = (self.nav_state != 1)
+        self.allow_commands = True #(self.nav_state != 1)
         if not self.allow_commands:
              self._set_latest_to_neutral()
 

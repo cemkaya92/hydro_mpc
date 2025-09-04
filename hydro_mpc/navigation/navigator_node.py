@@ -62,6 +62,13 @@ class NavigatorNode(Node):
         # Mission config
         self.mission = mission_yaml.get_full_config()
 
+        ok, msg = mission_yaml.validate_mission()
+        self.mission_valid = bool(ok)
+        if not ok:
+            self.get_logger().warn(f"[Navigator] Mission invalid: {msg}")
+        else:
+            self.get_logger().info(f"[Navigator] Mission valid: {msg}")
+
         # ------- components -------
         self.sm = NavStateMachine()
         self.tm = TrajectoryManager(
@@ -119,7 +126,11 @@ class NavigatorNode(Node):
         # offboard states
         self.allow_offboard_output = True        # master gate for Offboard setpoints
         self.in_offboard_last = None             # for logging transitions (optional)
-        
+        self.suppress_plan_output = False
+
+        # hold position states
+        self._hold_p4 = None          # latched hover target [x,y,z,psi]
+        self._hold_mode_prev = False  # tracks rising-edge into hold mode
 
         # ------- IO -------
         qos = QoSProfile(
@@ -224,6 +235,9 @@ class NavigatorNode(Node):
             self.auto_start = False
             self.start_requested = False
 
+            self.suppress_plan_output = True
+            self._clear_active_plan()
+
         else:
             # optional: clear EMERGENCY latch if you want automatic recovery logic here
             self.emergency_latched = False
@@ -249,12 +263,12 @@ class NavigatorNode(Node):
         
         
         # Ensure a plan exists (so trajectory_fresh can gate IDLE->MISSION)
-        if self.auto_start and not self.plan_created:
-            # legacy behavior: plan and start immediately
-            self._plan_mission()
-            self.plan_created = True
-            self.trajectory_fresh = True
-            self.get_logger().info(f"self.plan_created: {self.plan_created} ")
+        # if self.auto_start and not self.plan_created:
+        #     # legacy behavior: plan and start immediately
+        #     self._plan_mission()
+        #     self.plan_created = True
+        #     self.trajectory_fresh = True
+        #     self.get_logger().info(f"self.plan_created: {self.plan_created} ")
 
         # events
         target_fresh = (self.t_last_target is not None) and ((self.t_sim - self.t_last_target) <= self.mission.target.timeout)
@@ -279,6 +293,7 @@ class NavigatorNode(Node):
             landing_done=bool(landing_done),
             start_requested=bool(self.start_requested),
             halt_condition=bool(self.halt_condition),
+            mission_valid=bool(self.mission_valid),
         )
         prev = self.sm.state
         new = self.sm.step(ev)
@@ -290,7 +305,7 @@ class NavigatorNode(Node):
         
         # select references per state
         if new == NavState.IDLE:
-            p_ref, v_ref, a_ref = np.hstack([self.pos.copy(),0.0]), np.zeros(4), np.zeros(4)
+            p_ref, v_ref, a_ref = self._plan_or_hold()  
 
         elif new == NavState.TAKEOFF:
             p_ref, v_ref, a_ref = self._plan_or_hold()
@@ -330,7 +345,9 @@ class NavigatorNode(Node):
         v_cmd = np.array([v_cmd_xyz[0], v_cmd_xyz[1], v_cmd_xyz[2], v_ref[3]], float)
         a_cmd = np.array([a_ref[0],     a_ref[1],     a_ref[2],     0.0    ], float)  # or keep a_ref[3] if you compute ψ̈
 
-        self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+        # self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+
+        self._publish_cmd4(p_ref, v_ref, a_ref)
 
             
 
@@ -338,13 +355,17 @@ class NavigatorNode(Node):
 
         self.get_logger().info(f"State: {prev.name} -> {state.name}")
 
+        if state in (NavState.TAKEOFF, NavState.LOITER, NavState.FOLLOW_TARGET, NavState.MISSION):
+            self.suppress_plan_output = False
+
         if state == NavState.TAKEOFF:
             self._plan_takeoff()
             self.takeoff_started_sec = self.get_clock().now().seconds_nanoseconds()[0]
             self.takeoff_ok_counter = 0
 
-        elif prev == NavState.TAKEOFF and state in (NavState.LOITER, NavState.FOLLOW_TARGET):
+        elif state == NavState.MISSION:
             self._plan_mission()
+            self.limiter.reset()
 
         elif state == NavState.LOITER:
             speed = float(self.mission.loiter.radius * self.mission.loiter.omega)
@@ -375,6 +396,11 @@ class NavigatorNode(Node):
         elif state == NavState.LANDING:
             self._plan_landing()
 
+        elif state == NavState.IDLE:
+            self.suppress_plan_output = True   # hold in IDLE
+            self._clear_active_plan()          # drop any plan still in TM
+            self.halt_condition = False        # you already had this line
+
         # one-shot start trigger consumed once we leave IDLE
         if prev == NavState.IDLE and state != NavState.IDLE:
             self.start_requested = False
@@ -387,14 +413,37 @@ class NavigatorNode(Node):
 
 
     def _plan_or_hold(self):
-        """Get plan ref, or publish a hold reference if there’s no active plan."""
-        p, v, a = self.tm.get_plan_ref(self.t_sim)
-        if p is None:
-            # hold current pose & yaw
-            p = self._current_p4()
+        """Return plan ref; if we're in hold, return a latched hover target."""
+        in_hold = (self.suppress_plan_output or self.sm.state == NavState.IDLE)
+
+        # Rising edge: just entered hold → latch the current pose once
+        if in_hold and not self._hold_mode_prev:
+            self._hold_p4 = self._current_p4().copy()
+            self.limiter.reset()          # optional: avoid step-limited drift
+            # self.get_logger().info(f"[Navigator] HOLD latched at {self._hold_p4}")
+
+        # Update edge tracker
+        self._hold_mode_prev = in_hold
+
+        if in_hold:
+            # Use the latched pose every tick (do NOT refresh it)
+            p = self._hold_p4 if self._hold_p4 is not None else self._current_p4()
             v = np.zeros(4, dtype=float)
             a = np.zeros(4, dtype=float)
+            return p.copy(), v, a
+
+        # Not in hold → clear the latch (so next entry will re-latch)
+        self._hold_p4 = None
+
+        # Normal: pull from active plan; if none, fall back to a latched-or-current hold
+        p, v, a = self.tm.get_plan_ref(self.t_sim)
+        if p is None:
+            if self._hold_p4 is None:
+                self._hold_p4 = self._current_p4().copy()
+            return self._hold_p4.copy(), np.zeros(4, float), np.zeros(4, float)
+
         return p, v, a
+
 
     # -------------------- planning --------------------
     def _plan_mission(self):
@@ -539,7 +588,7 @@ class NavigatorNode(Node):
         # Use takeoff speed as a proxy if you like; otherwise ~0.6 m/s is gentle.
         dz = abs(self.pos[2] - z_t)
         descent_rate = float(getattr(self.mission.takeoff, "speed", 0.6)) or 0.6
-        T = max(2.0, dz / max(0.2, descent_rate))
+        T = max(20.0, dz / max(0.2, descent_rate))
 
         state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4, dtype=float)])
         self.tm.plan_min_jerk_pose_to(
@@ -576,6 +625,9 @@ class NavigatorNode(Node):
         self.start_requested = False
         # (optional) mark current plan as consumed
         self.trajectory_fresh = False
+        self.auto_start = False            # don’t immediately leave IDLE again
+        self.suppress_plan_output = True   # force HOLD outputs
+        self._clear_active_plan()          # purge any active mission plan
         resp.success = True
         resp.message = "Mission halt requested."
         return resp
@@ -670,6 +722,23 @@ class NavigatorNode(Node):
         self.emergency_latched = False
         # … reset state machine, plans, limiter, etc.
         self.allow_offboard_output = True
+
+    def _clear_active_plan(self):
+        """
+        Best-effort: clear any active plan in the TrajectoryManager if the API exists.
+        Otherwise mark our bookkeeping so we won't rely on a stale plan.
+        """
+        for fn in ("clear", "clear_plan", "reset"):
+            if hasattr(self.tm, fn):
+                try:
+                    getattr(self.tm, fn)()
+                    break
+                except Exception:
+                    pass
+        # local bookkeeping
+        self.plan_created = False
+        self.trajectory_fresh = False
+        self.at_destination = False
 
 
 def main(args=None):

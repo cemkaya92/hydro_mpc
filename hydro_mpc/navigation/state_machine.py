@@ -8,6 +8,7 @@ class NavState(Enum):
     TAKEOFF = auto()
     LOITER = auto()
     FOLLOW_TARGET = auto()
+    MISSION = auto()
     LANDING = auto()
     EMERGENCY = auto()
 
@@ -23,6 +24,7 @@ class NavEvents:
     landing_done: bool
     start_requested: bool
     halt_condition: bool
+    mission_valid: bool
 
 class NavStateMachine:
     """Pure transition logic; no ROS, no planning side effects."""
@@ -35,8 +37,11 @@ class NavStateMachine:
     def step(self, ev: NavEvents) -> NavState:
 
         # Global halt: drop to IDLE from any non-emergency state
-        if ev.halt_condition and self.state != NavState.EMERGENCY:
-            self.state = NavState.IDLE
+        if ev.halt_condition:
+            if self.state != NavState.EMERGENCY:
+                self.state = NavState.IDLE
+            else:
+                self.state = NavState.LANDING
             return self.state
     
         s = self.state
@@ -46,11 +51,24 @@ class NavStateMachine:
 
         elif s == NavState.TAKEOFF:
             if ev.at_takeoff_wp:
-                self.state = NavState.FOLLOW_TARGET if ev.target_fresh else NavState.LOITER
+                if ev.target_fresh:
+                    self.state = NavState.FOLLOW_TARGET
+                elif ev.mission_valid:
+                    self.state = NavState.MISSION
+                else:
+                    self.state = NavState.LOITER 
 
         elif s == NavState.LOITER:
             if ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
+
+        elif s == NavState.MISSION:
+            if ev.landing_needed:
+                self.state = NavState.LANDING
+            elif not ev.mission_valid:
+                self.state = NavState.LOITER          # mission was invalidated; fall back
+            elif ev.at_destination:
+                self.state = NavState.LOITER          # finished the track; loiter
 
         elif s == NavState.FOLLOW_TARGET:
             if ev.landing_needed:

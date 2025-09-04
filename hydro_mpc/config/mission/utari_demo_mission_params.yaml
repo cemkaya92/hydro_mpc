@@ -7,7 +7,7 @@
       common:
         repeat: "loop"             # "none" | "loop" | "pingpong"
         start:
-          use_current: true        # if false, use x/y/psi below (ENU)
+          use_current: false        # if false, use x/y/psi below (ENU)
           x: 0.0
           y: 0.0
           psi: 0.0
@@ -19,12 +19,12 @@
         #   goal_xypsi: [6.0, 0.5, 0.0]
         #   duration: 100.0
         # straight:
-        #   segment_distance: 10.0
+          # segment_distance: 10.0
         # arc:
-        #   radius: 3.0
-        #   angle: 1.57079632679
-        #   yaw_rate: 0.4
-        #   cw: true
+          # radius: 5.0
+          # angle: 1.57079632679
+          # yaw_rate: 0.4
+          # cw: true
         # rounded_rectangle:
         #   width: 10.0
         #   height: 6.0
@@ -38,7 +38,7 @@
       # Quad-specific vertical/phase controls
       takeoff:
         # Waypoint to climb to (NED: z negative for up; ENU: make z positive)
-        waypoint: [0.0, 0.0, -2.0]
+        waypoint: [0.0, 0.0, -5.0]
         speed: 1.0            # m/s
 
       loiter:

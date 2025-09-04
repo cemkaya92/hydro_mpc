@@ -199,9 +199,12 @@ class OffboardManagerNode(Node):
 
         self.last_ack_ok = ok
         if ok:
-            self.get_logger().info(f"ACK OK for cmd {cmd}")
+            if cmd == VehicleCommand.VEHICLE_CMD_DO_SET_MODE:
+                self.get_logger().info("ACK OK: DO_SET_MODE accepted")
+            elif cmd == VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM:
+                self.get_logger().info("ACK OK: ARM/DISARM accepted")
         else:
-            self.get_logger().warn(f"ACK result {ack.result} for cmd {cmd} (param1={ack.result_param1})")
+            self.get_logger().warn(f"ACK result not accepted: {ack.result} for cmd {cmd} (param1={ack.result_param1})")
     
     def _odom_cb(self, msg: VehicleOdometry):
         self.px4_timestamp_us = msg.timestamp
@@ -233,18 +236,21 @@ class OffboardManagerNode(Node):
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
 
-        # Always safe to publish keepalive (it does not switch modes by itself)       
-        now_us = int(self.get_clock().now().nanoseconds / 1000)
-        offboard = OffboardControlMode()
-        offboard.timestamp = now_us
-        offboard.position = False
-        offboard.velocity = False
-        offboard.acceleration = False
-        offboard.attitude = False
-        offboard.body_rate = False
-        offboard.thrust_and_torque = True
-        offboard.direct_actuator = False
-        self.offboard_ctrl_pub.publish(offboard)
+        # Only publish keepalive when we're actually allowing Offboard control
+        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched)
+
+        if allow_keepalive:
+            now_us = int(self.get_clock().now().nanoseconds / 1000)
+            offboard = OffboardControlMode()
+            offboard.timestamp = now_us
+            offboard.position = False
+            offboard.velocity = False
+            offboard.acceleration = False
+            offboard.attitude = False
+            offboard.body_rate = False
+            offboard.thrust_and_torque = True
+            offboard.direct_actuator = False
+            self.offboard_ctrl_pub.publish(offboard)
 
         # 2) Decide whether we want Offboard/Arm active
         want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 

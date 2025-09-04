@@ -123,14 +123,6 @@ def generate_launch_description():
             }]
         ),
         
-        Node(
-            package='hydro_mpc', 
-            executable='yolo_detector', 
-            name='yolo_detector',
-            namespace=ns_drone,
-            parameters=[yolo_yaml],
-            prefix=venv_py
-        ),
 
         Node(
             package='hydro_mpc', 

@@ -231,6 +231,20 @@ class ParamLoader:
         )
 
     
+    def validate_mission(self) -> tuple[bool, str]:
+        """
+        Try parsing the mission; return (ok, message).
+        Keeps get_full_config() unchanged — just a fast preflight check.
+        """
+        try:
+            m = self.get_mission()
+            # optional guardrails:
+            if (m.common.speed is not None) and (m.common.speed < 0):
+                return False, "common.speed must be >= 0"
+            return True, f"OK ({type(m).__name__})"
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+
 
 
     def as_dict(self):
