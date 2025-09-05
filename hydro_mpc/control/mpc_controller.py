@@ -20,7 +20,7 @@ import signal
 
 
 
-class MpcControllerNode(Node):
+class ControllerNode(Node):
     def __init__(self):
         super().__init__('mpc_controller_node')
         
@@ -271,26 +271,26 @@ class MpcControllerNode(Node):
             else:
                 x, y, z = item
 
-            p = PoseStamped()
-            p.header = msg.header
-            p.pose.position.x = float(x)
-            p.pose.position.y = float(y)
-            p.pose.position.z = float(z)
+            pose_msg = PoseStamped()
+            pose_msg.header = msg.header
+            pose_msg.pose.position.x = float(x)
+            pose_msg.pose.position.y = float(y)
+            pose_msg.pose.position.z = float(z)
 
             if have_att:
                 qx, qy, qz, qw = self._rpy_to_quat_map(r, p, yy)
-                p.pose.orientation.x = float(qx)
-                p.pose.orientation.y = float(qy)
-                p.pose.orientation.z = float(qz)
-                p.pose.orientation.w = float(qw)
+                pose_msg.pose.orientation.x = float(qx)
+                pose_msg.pose.orientation.y = float(qy)
+                pose_msg.pose.orientation.z = float(qz)
+                pose_msg.pose.orientation.w = float(qw)
             else:
                 # Fallback: identity orientation
-                p.pose.orientation.x = 0.0
-                p.pose.orientation.y = 0.0
-                p.pose.orientation.z = 0.0
-                p.pose.orientation.w = 1.0
+                pose_msg.pose.orientation.x = 0.0
+                pose_msg.pose.orientation.y = 0.0
+                pose_msg.pose.orientation.z = 0.0
+                pose_msg.pose.orientation.w = 1.0
 
-            poses.append(p)
+            poses.append(pose_msg)
 
         msg.poses = poses
         self.trajectory_pub.publish(msg)
@@ -327,7 +327,7 @@ class MpcControllerNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MpcControllerNode()
+    node = ControllerNode()
 
     def signal_handler(sig, frame):
         node.get_logger().info("Shutdown signal received. Cleaning up...")

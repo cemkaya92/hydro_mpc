@@ -7,11 +7,14 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from px4_msgs.msg import (
-    VehicleCommand, OffboardControlMode, VehicleOdometry
+    VehicleCommand, OffboardControlMode, VehicleOdometry,
+    VehicleStatus, VehicleCommandAck
 )
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String, Bool
 from std_srvs.srv import SetBool, Trigger
+from custom_offboard_msgs.msg import SafetyTrip
+from builtin_interfaces.msg import Time
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -41,12 +44,15 @@ class OffboardManagerNode(Node):
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('disarm_on_trip', False)
         self.declare_parameter('auto_reenter_after_trip', False)  # (default: NO auto re-entry)
+        self.declare_parameter('sys_id', 1)
 
         package_dir = get_package_share_directory('hydro_mpc')
+
         vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
         self.disarm_on_trip = bool(self.get_parameter('disarm_on_trip').get_parameter_value().bool_value)
         self.auto_reenter_after_trip = bool(self.get_parameter('auto_reenter_after_trip').get_parameter_value().bool_value)
+        self.sys_id = int(self.get_parameter('sys_id').get_parameter_value().integer_value)
 
         sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
         vehicle_yaml_path = os.path.join(package_dir, 'config', 'vehicle_parameters', vehicle_param_file)
@@ -58,25 +64,40 @@ class OffboardManagerNode(Node):
         odom_topic = sitl_yaml.get_topic("odometry_topic")
         status_topic = sitl_yaml.get_topic("status_topic")
         target_state_topic = sitl_yaml.get_topic("target_state_topic")
+        vehicle_command_topic = sitl_yaml.get_topic("vehicle_command_topic")
+        vehicle_command_ack_topic = sitl_yaml.get_topic("vehicle_command_ack_topic")
         control_cmd_topic = sitl_yaml.get_topic("control_command_topic")
-        self.sys_id = sitl_yaml.get_nested(["sys_id"], 1)
+        offboard_control_topic = sitl_yaml.get_topic("offboard_control_topic")
 
-        # pubs
-        self.cmd_pub = self.create_publisher(VehicleCommand, sitl_yaml.get_topic("vehicle_command_topic"), 10)
-        self.offboard_ctrl_pub = self.create_publisher(OffboardControlMode, sitl_yaml.get_topic("offboard_control_topic"), 10)
-
-        # subs
+        # QOS profiles
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
+        trip_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=1
+        )
+
+        # pubs
+        self.cmd_pub = self.create_publisher(VehicleCommand, vehicle_command_topic, 10)
+        self.offboard_ctrl_pub = self.create_publisher(OffboardControlMode, offboard_control_topic, 10)
+        # latched trip topic (downstream nodes subscribe and react)
+        self.trip_pub = self.create_publisher(SafetyTrip, 'safety/trip', trip_qos)
+
+
+        # subs
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos)
         self.create_subscription(Odometry, target_state_topic, self._target_cb, qos)
         self.create_subscription(Float32MultiArray, control_cmd_topic, self._cmd_cb, 10)
+        self.create_subscription(VehicleStatus, status_topic, self._on_status, qos)
+        self.create_subscription(VehicleCommandAck, vehicle_command_ack_topic, self._on_ack, qos)
 
-        # services (to control the latch)  <-- NEW
+        # services (to control the latch) 
         self.srv_enable = self.create_service(SetBool, 'offboard_manager/enable_offboard', self._srv_enable_offboard)
         self.srv_clear  = self.create_service(Trigger, 'offboard_manager/clear_trip', self._srv_clear_trip)
 
@@ -90,15 +111,23 @@ class OffboardManagerNode(Node):
         self.q = np.array([1.0, 0.0, 0.0, 0.0])  # w,x,y,z
         self.rpy = np.zeros(3)
         self.omega_body = np.zeros(3)
+
         self.target_pos = np.zeros(3)
         self.target_vel = np.zeros(3)
-        self.have_target = True # HARD-CODED FOR TESTING =======================================================
+        self.have_target = False 
         self.have_odom = False
         self.last_cmd: np.ndarray | None = None
 
         # control flags
         self.offboard_set = False
-        self.armed_once = False
+        self.nav_offboard = False
+        self.armed = False
+        self.last_ack_ok = False
+
+        # Command tracking / retries
+        self._pending = {"offboard": None, "arm": None}   # each entry: dict(timestamp, attempts) or None
+        self._ack_timeout = 0.5    # seconds to wait before retry
+        self._max_attempts = 5
 
         # LATCH flags (block offboard re-entry after trip)  
         self.trip_latched = False         # set True on failsafe trip
@@ -109,8 +138,11 @@ class OffboardManagerNode(Node):
         self.get_logger().info("OffboardManagerNode initialized")
 
         # timers
-        self.keepalive_timer = self.create_timer(0.2, self._publish_offboard_keepalive)  # 5 Hz
+        self.keepalive_timer = self.create_timer(0.1, self._publish_offboard_keepalive) # 10 Hz
         self.safety_timer = self.create_timer(0.1, self._safety_tick)                   # 10 Hz
+        self.posctl_retry_timer = self.create_timer(0.3, self._posctl_retry_tick)       # retry leaving OFFBOARD
+        # publish an initial "not tripped" state so late subscribers see a benign value
+        self._publish_trip(False, "")
 
     # ---------- services ----------
     def _srv_enable_offboard(self, req: SetBool.Request, res: SetBool.Response):
@@ -135,22 +167,56 @@ class OffboardManagerNode(Node):
         return res
     
     # ---------- callbacks ----------
-    def _timing(self, stamp_us):
-        t = stamp_us * 1e-6
-        if self.t0 is None:
-            self.t0 = t
-        return t - self.t0
+    def _on_status(self, msg: VehicleStatus):
+        try:
+            OFFBOARD = VehicleStatus.NAVIGATION_STATE_OFFBOARD
+            ARMED = VehicleStatus.ARMING_STATE_ARMED
+        except AttributeError:
+            OFFBOARD, ARMED = 14, 2  # fallback (PX4 typical values)
+        self.nav_offboard = (msg.nav_state == OFFBOARD)
+        self.armed = (msg.arming_state == ARMED)
 
+    def _on_ack(self, ack: VehicleCommandAck):
+        # Map enum in a tolerant way
+        ACCEPTED = getattr(VehicleCommandAck, "VEHICLE_RESULT_ACCEPTED", 0)
+        TEMP_REJ = getattr(VehicleCommandAck, "VEHICLE_RESULT_TEMPORARILY_REJECTED", 1)
+        DENIED   = getattr(VehicleCommandAck, "VEHICLE_RESULT_DENIED", 3)
 
+        cmd = int(ack.command)
+        ok = (ack.result == ACCEPTED)
+
+        # Which logical key?
+        if cmd == VehicleCommand.VEHICLE_CMD_DO_SET_MODE:
+            key = "offboard"
+        elif cmd == VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM:
+            key = "arm"
+        else:
+            key = None
+
+        if key:
+            # clear pending
+            self._pending[key] = None
+
+        self.last_ack_ok = ok
+        if ok:
+            if cmd == VehicleCommand.VEHICLE_CMD_DO_SET_MODE:
+                self.get_logger().info("ACK OK: DO_SET_MODE accepted")
+            elif cmd == VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM:
+                self.get_logger().info("ACK OK: ARM/DISARM accepted")
+        else:
+            self.get_logger().warn(f"ACK result not accepted: {ack.result} for cmd {cmd} (param1={ack.result_param1})")
+    
     def _odom_cb(self, msg: VehicleOdometry):
         self.px4_timestamp_us = msg.timestamp
         self.t_sim = self._timing(msg.timestamp)
         self.pos = np.array(msg.position, dtype=float)
         self.vel = np.array(msg.velocity, dtype=float)
         self.q = np.array([msg.q[0], msg.q[1], msg.q[2], msg.q[3]], dtype=float)  # w,x,y,z
-        self.rpy = self._quat_to_eul(self.q)
+        self.rpy[2],self.rpy[1],self.rpy[0] = self._quat_to_eul(self.q)
         self.omega_body = np.array(msg.angular_velocity, dtype=float)
+
         self.mon.note_odom_stamp(msg.timestamp * 1e-6)
+
         if not self.have_odom:
             self.get_logger().info("First odom received.")
             self.have_odom = True
@@ -170,32 +236,53 @@ class OffboardManagerNode(Node):
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
 
-        # Always safe to publish keepalive (it does not switch modes by itself)       
-        now_us = int(self.get_clock().now().nanoseconds / 1000)
-        offboard = OffboardControlMode()
-        offboard.timestamp = now_us
-        offboard.position = False
-        offboard.velocity = False
-        offboard.acceleration = False
-        offboard.attitude = False
-        offboard.body_rate = False
-        offboard.thrust_and_torque = True
-        offboard.direct_actuator = False
-        self.offboard_ctrl_pub.publish(offboard)
+        # Only publish keepalive when we're actually allowing Offboard control
+        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched)
 
-        # Only auto-set Offboard+Arm if not blocked/latched
-        if (not self.offboard_set
-            and not self.offboard_blocked
-            and not self.trip_latched
-            and self.have_odom
-            and self.have_target):
-            self._set_offboard_and_arm(now_us)
+        if allow_keepalive:
+            now_us = int(self.get_clock().now().nanoseconds / 1000)
+            offboard = OffboardControlMode()
+            offboard.timestamp = now_us
+            offboard.position = False
+            offboard.velocity = False
+            offboard.acceleration = False
+            offboard.attitude = False
+            offboard.body_rate = False
+            offboard.thrust_and_torque = True
+            offboard.direct_actuator = False
+            self.offboard_ctrl_pub.publish(offboard)
+
+        # 2) Decide whether we want Offboard/Arm active
+        want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 
+
+        if not want_control:
+            self.offboard_set = False
+            return
+    
+        # 3) Stage OFFBOARD first, then ARM (with ACK + status verification)
+        if not self.nav_offboard and self._pending["offboard"] is None:
+            self._request_offboard_mode()
+
+        # Retry OFFBOARD if needed
+        self._maybe_retry("offboard")
+
+        # Once OFFBOARD is active, request ARM (if not yet armed)
+        if self.nav_offboard and (not self.armed) and self._pending["arm"] is None:
+            self._request_arm(True)
+
+        # Retry ARM if needed
+        self._maybe_retry("arm")
+
+        # 4) Consider the switch successful only when BOTH are true
+        self.offboard_set = self.nav_offboard and self.armed
+    
 
     def _safety_tick(self):
-        if not (self.have_odom and self.have_target):
+        if not (self.have_odom):
             return
 
         u_cmd = self.last_cmd if self.last_cmd is not None else None
+
         safe, reason = self.mon.evaluate(
             self.t_sim, self.rpy, self.omega_body,
             self.pos, self.vel,
@@ -208,6 +295,8 @@ class OffboardManagerNode(Node):
             # you can choose to auto-reenter; here we keep it manual (offboard_set stays as is)
 
             return
+        
+        self.get_logger().error(f"self.rpy: {self.rpy} | lim: {self.mon.limits.max_roll_pitch_deg}")
 
         # Unsafe -> switch to POSCTL and (optionally) disarm; then LATCH
         now_us = int(self.get_clock().now().nanoseconds / 1000)
@@ -222,21 +311,84 @@ class OffboardManagerNode(Node):
             self.offboard_blocked = True
 
         if reason:
-            self.get_logger().error(f"Failsafe trip: {reason} (Offboard re-entry blocked; call /offboard_manager/enable_offboard True to re-enable)")
+            self.get_logger().error(f"Failsafe trip: {reason} (leaving Offboard → POSCTL)")
+            self._publish_trip(True, reason)
+
+
+    def _posctl_retry_tick(self):
+        # While still in OFFBOARD after a trip/block, keep nudging PX4 to POSCTL.
+        if self.trip_latched and self.nav_offboard:
+            self._set_posctl_mode(self._now_us())
 
 
     # ---------- mode/arm helpers ----------
-    def _set_offboard_and_arm(self, now_us: int):
+    def _timing(self, stamp_us):
+        t = stamp_us * 1e-6
+        if self.t0 is None:
+            self.t0 = t
+        return t - self.t0
+    
+    def _now_s(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
 
-        self.get_logger().info("sending _set_offboard_and_arm.")
-        if self.offboard_set or self.offboard_blocked or self.trip_latched:
-            return
-        
+    def _now_us(self) -> int:
+        return int(self.get_clock().now().nanoseconds / 1000)
+
+    def _request_offboard_mode(self):
+        """
+        VEHICLE_CMD_DO_SET_MODE (176):
+        param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED (1)
+        param2 = PX4_CUSTOM_MAIN_MODE_OFFBOARD (6)
+        param3 = PX4_CUSTOM_SUB_MODE (0)
+        """
+        now_us = self._now_us()
         self.cmd_pub.publish(create_offboard_mode_command(now_us, self.sys_id))
-        self.cmd_pub.publish(create_arm_command(now_us, self.sys_id))
-        self.offboard_set = True
-        self.armed_once = True
-        self.get_logger().info("Sent OFFBOARD and ARM")
+        self._pending["offboard"] = {
+            "timestamp": self._now_s(),
+            "attempts": (self._pending["offboard"]["attempts"] + 1 if self._pending["offboard"] else 1),
+        }
+        self.get_logger().info("Requested OFFBOARD mode")
+
+    def _request_arm(self, arm: bool = True):
+        now_us = self._now_us()
+        if arm:
+            self.cmd_pub.publish(create_arm_command(now_us, self.sys_id))
+            self.get_logger().info("Requested ARM")
+        else:
+            self.cmd_pub.publish(create_disarm_command(now_us, self.sys_id))
+            self.get_logger().info("Requested DISARM")
+        self._pending["arm"] = {
+            "timestamp": self._now_s(),
+            "attempts": (self._pending["arm"]["attempts"] + 1 if self._pending["arm"] else 1),
+        }
+
+    def _maybe_retry(self, key: str):
+        """Retry if no ACCEPTED ack and status not yet reached within timeout."""
+        pend = self._pending.get(key)
+        if not pend:
+            return
+
+        # If status already satisfied, clear pending
+        if key == "offboard" and self.nav_offboard:
+            self._pending[key] = None
+            return
+        if key == "arm" and self.armed:
+            self._pending[key] = None
+            return
+
+        if pend["attempts"] >= self._max_attempts:
+            self.get_logger().error(f"{key}: max attempts reached without success")
+            self._pending[key] = None
+            return
+
+        if (self._now_s() - pend["timestamp"]) >= self._ack_timeout:
+            # timed out → retry
+            if key == "offboard":
+                self.get_logger().warn("Retrying OFFBOARD request…")
+                self._request_offboard_mode()
+            elif key == "arm":
+                self.get_logger().warn("Retrying ARM request…")
+                self._request_arm(True)
 
     def _set_posctl_mode(self, now_us: int):
         self.cmd_pub.publish(create_posctl_mode_command(now_us, self.sys_id))
@@ -247,13 +399,23 @@ class OffboardManagerNode(Node):
         self.cmd_pub.publish(create_disarm_command(now_us, self.sys_id))
         self.get_logger().warn("Disarm sent")
 
-    # ---------- utils ----------
+    def _publish_trip(self, tripped: bool, reason: str):
+        msg = SafetyTrip()
+        msg.stamp = self.get_clock().now().to_msg()
+        msg.source = self.get_name()
+        msg.tripped = bool(tripped)
+        msg.reason = str(reason or "")
+        self.trip_pub.publish(msg)
+
+
     @staticmethod
     def _quat_to_eul(q_wxyz: np.ndarray) -> np.ndarray:
         # PX4 gives [w, x, y, z]
         from scipy.spatial.transform import Rotation as R
         r = R.from_quat([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]])
         return r.as_euler('ZYX', degrees=False)  # [yaw, pitch, roll]
+    
+    
 
 def main(args=None):
     rclpy.init(args=args)

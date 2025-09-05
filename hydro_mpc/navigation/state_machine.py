@@ -8,16 +8,23 @@ class NavState(Enum):
     TAKEOFF = auto()
     LOITER = auto()
     FOLLOW_TARGET = auto()
+    MISSION = auto()
     LANDING = auto()
+    EMERGENCY = auto()
 
 @dataclass
 class NavEvents:
     have_odom: bool
     auto_start: bool
     target_fresh: bool
+    trajectory_fresh: bool
     at_takeoff_wp: bool
+    at_destination: bool
     landing_needed: bool
     landing_done: bool
+    start_requested: bool
+    halt_condition: bool
+    mission_valid: bool
 
 class NavStateMachine:
     """Pure transition logic; no ROS, no planning side effects."""
@@ -28,18 +35,40 @@ class NavStateMachine:
         self.state = state
 
     def step(self, ev: NavEvents) -> NavState:
+
+        # Global halt: drop to IDLE from any non-emergency state
+        if ev.halt_condition:
+            if self.state != NavState.EMERGENCY:
+                self.state = NavState.IDLE
+            else:
+                self.state = NavState.LANDING
+            return self.state
+    
         s = self.state
         if s == NavState.IDLE:
-            if ev.have_odom and ev.auto_start:
+            if ev.have_odom and (ev.auto_start or ev.start_requested):
                 self.state = NavState.TAKEOFF
 
         elif s == NavState.TAKEOFF:
             if ev.at_takeoff_wp:
-                self.state = NavState.FOLLOW_TARGET if ev.target_fresh else NavState.LOITER
+                if ev.target_fresh:
+                    self.state = NavState.FOLLOW_TARGET
+                elif ev.mission_valid:
+                    self.state = NavState.MISSION
+                else:
+                    self.state = NavState.LOITER 
 
         elif s == NavState.LOITER:
             if ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
+
+        elif s == NavState.MISSION:
+            if ev.landing_needed:
+                self.state = NavState.LANDING
+            elif not ev.mission_valid:
+                self.state = NavState.LOITER          # mission was invalidated; fall back
+            elif ev.at_destination:
+                self.state = NavState.LOITER          # finished the track; loiter
 
         elif s == NavState.FOLLOW_TARGET:
             if ev.landing_needed:
@@ -48,7 +77,7 @@ class NavStateMachine:
                 self.state = NavState.LOITER
 
         elif s == NavState.LANDING:
-            if ev.landing_done:
+            if (ev.landing_done or ev.at_destination):
                 self.state = NavState.IDLE
 
         return self.state
