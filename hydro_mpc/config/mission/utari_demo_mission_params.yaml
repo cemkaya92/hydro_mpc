@@ -11,7 +11,7 @@
           x: 0.0
           y: 0.0
           psi: 0.0
-        speed: 1.0                 # nominal cruise speed for horizontal pattern (m/s)
+        speed: -1.0                 # nominal cruise speed for horizontal pattern (m/s)
 
       params:
         # Examples (only keep the one matching mission.type)
@@ -55,8 +55,8 @@
         timeout: 0.6          # seconds without target update => target considered lost
 
       traj:
-        v_max: [2.0, 2.0, 1.0]     # max vel used by min-jerk generator [m/s]
-        a_max: [2.0, 2.0, 1.0]     # max accel used by min-jerk generator [m/s^2]
-        yawrate_max: 1.2      
-        yawacc_max: 3.0
-        segment_duration: 3.0      # default segment duration [s]
+        v_max: [1.0, 1.0, 0.5]     # max vel used by min-jerk generator [m/s]
+        a_max: [1.0, 1.0, 0.5]     # max accel used by min-jerk generator [m/s^2]
+        yawrate_max: 0.5      
+        yawacc_max: 1.0
+        segment_duration: 10.0      # default segment duration [s]

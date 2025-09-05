@@ -6,7 +6,7 @@ package_name = 'hydro_mpc'
 
 setup(
     name=package_name,
-    version='0.2.2',
+    version='0.3.0',
     packages=find_packages(include=[package_name, f'{package_name}.*']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -36,7 +36,8 @@ setup(
             'gui_launcher = hydro_mpc.gui.gui_launcher:main',
             'yolo_detector = hydro_mpc.perception.yolo_detector_node:main',
             'aruco_detector = hydro_mpc.perception.aruco_detector_node:main',
-            'ekf_fuser = hydro_mpc.perception.ekf_fuser_node:main'
+            'ekf_fuser = hydro_mpc.perception.ekf_fuser_node:main',
+            'wait_px4_ready = hydro_mpc.utils.wait_px4_ready:main'
         ],
     },
 )
