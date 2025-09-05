@@ -323,6 +323,12 @@ class EkfFuserNode(Node):
         fused.pose.pose.orientation.w = cy
         fused.pose.pose.orientation.z = sy
 
+        # --- DEBUG: print Euler angles in degrees ---
+        # Only yaw is valid here (roll, pitch are undefined / huge covariance)
+        yaw_deg = math.degrees(self.x[6,0])
+        self.get_logger().info(f"Detected rover Euler angles [deg]: yaw={yaw_deg:.2f}")
+
+
         # Build 6x6 covariance: [x y z R P Y]
         cov = np.zeros((6,6), dtype=float)
         cov[0:3, 0:3] = self.P[0:3, 0:3]            # position block

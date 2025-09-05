@@ -3,10 +3,11 @@
     # ArUco detector parameters
     perception:
       aruco_detector:
-        tag_dictionary: "DICT_4X4_250"
+        tag_dictionary: "DICT_6X6_250"
         tag_ids: [0]
-        plate_size_m: 0.60
-        publish_debug: true
+        plate_size_m: 0.50
+        publish_debug: false
+        overlay.show: false
         overlay.base_is_frd: true
         camera_optical_frame: "drone/camera_optical_frame"
         parent_frame: "drone/base_link"

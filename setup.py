@@ -26,7 +26,7 @@ setup(
     maintainer_email='uluhancem.kaya@uta.edu',
     description='ROS 2 PX4 control system with MPC and Offboard modes.',
     license='MIT',
-    tests_require=['pytest'],
+    #tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'motor_commander = hydro_mpc.control.motor_commander:main',
