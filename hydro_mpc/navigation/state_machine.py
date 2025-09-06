@@ -11,6 +11,7 @@ class NavState(Enum):
     MISSION = auto()
     LANDING = auto()
     EMERGENCY = auto()
+    MANUAL = auto()
 
 @dataclass
 class NavEvents:
@@ -25,6 +26,7 @@ class NavEvents:
     start_requested: bool
     halt_condition: bool
     mission_valid: bool
+    manual_requested: bool
 
 class NavStateMachine:
     """Pure transition logic; no ROS, no planning side effects."""
@@ -44,6 +46,10 @@ class NavStateMachine:
                 self.state = NavState.LANDING
             return self.state
     
+        if ev.manual_requested:
+            self.state = NavState.MANUAL
+            return self.state
+        
         s = self.state
         if s == NavState.IDLE:
             if ev.have_odom and (ev.auto_start or ev.start_requested):
@@ -79,5 +85,9 @@ class NavStateMachine:
         elif s == NavState.LANDING:
             if (ev.landing_done or ev.at_destination):
                 self.state = NavState.IDLE
+
+        elif s == NavState.MANUAL:
+            if ev.have_odom and (ev.auto_start or ev.start_requested):
+                self.state = NavState.TAKEOFF
 
         return self.state

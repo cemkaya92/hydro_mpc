@@ -128,6 +128,9 @@ class NavigatorNode(Node):
         self.in_offboard_last = None             # for logging transitions (optional)
         self.suppress_plan_output = False
 
+        # manual states
+        self.manual_requested = False
+
         # hold position states
         self._hold_p4 = None          # latched hover target [x,y,z,psi]
         self._hold_mode_prev = False  # tracks rising-edge into hold mode
@@ -201,6 +204,9 @@ class NavigatorNode(Node):
     def _on_status(self, msg: VehicleStatus):
         self.nav_offboard = (msg.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD)
         self.armed = (msg.arming_state == VehicleStatus.ARMING_STATE_ARMED)
+        self.manual_requested = self._is_manual_nav(msg.nav_state) 
+
+        #self.get_logger().info(f"self.manual_requested: {self.manual_requested}")
 
         if self.nav_offboard != self.in_offboard_last:
             self.get_logger().info(f"[Navigator] FCU mode changed: {'OFFBOARD' if self.nav_offboard else 'NOT-OFFBOARD'}")
@@ -280,6 +286,7 @@ class NavigatorNode(Node):
         landing_done = (self.sm.state == NavState.LANDING and
                         (self.pos[2] <= self.mission.landing.final_altitude + 0.05) and (np.linalg.norm(self.vel) < 0.3))
 
+        
         #self.get_logger().info(f"State: {self.sm.state} | at_takeoff: {at_takeoff}: {np.linalg.norm(self.pos - self.mission.takeoff.waypoint)}: {np.linalg.norm(self.vel)}")
 
         ev = NavEvents(
@@ -294,6 +301,7 @@ class NavigatorNode(Node):
             start_requested=bool(self.start_requested),
             halt_condition=bool(self.halt_condition),
             mission_valid=bool(self.mission_valid),
+            manual_requested=bool(self.manual_requested)
         )
         prev = self.sm.state
         new = self.sm.step(ev)
@@ -400,6 +408,11 @@ class NavigatorNode(Node):
             self.suppress_plan_output = True   # hold in IDLE
             self._clear_active_plan()          # drop any plan still in TM
             self.halt_condition = False        # you already had this line
+
+        elif state == NavState.MANUAL:
+            self.suppress_plan_output = True
+            self._clear_active_plan()
+            self.halt_condition = False
 
         # one-shot start trigger consumed once we leave IDLE
         if prev == NavState.IDLE and state != NavState.IDLE:
@@ -739,6 +752,20 @@ class NavigatorNode(Node):
         self.plan_created = False
         self.trajectory_fresh = False
         self.at_destination = False
+
+    def _is_manual_nav(self, nav_state: int) -> bool:                           
+        VS = VehicleStatus
+        # PX4 "pilot" modes; extend if you use others
+        manual_modes = (
+            getattr(VS, "NAVIGATION_STATE_MANUAL", 0),
+            getattr(VS, "NAVIGATION_STATE_ALTCTL", 0),
+            getattr(VS, "NAVIGATION_STATE_POSCTL", 0),
+            getattr(VS, "NAVIGATION_STATE_ACRO", 0),
+            getattr(VS, "NAVIGATION_STATE_RATTITUDE", 0),
+            getattr(VS, "NAVIGATION_STATE_STAB", 0),
+        )
+
+        return nav_state in manual_modes
 
 
 def main(args=None):

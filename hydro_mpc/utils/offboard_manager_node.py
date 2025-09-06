@@ -45,6 +45,9 @@ class OffboardManagerNode(Node):
         self.declare_parameter('disarm_on_trip', False)
         self.declare_parameter('auto_reenter_after_trip', False)  # (default: NO auto re-entry)
         self.declare_parameter('sys_id', 1)
+        self.declare_parameter('respect_manual_modes', True)                       # NEW
+        self.declare_parameter('manual_release_sec', 0.0)                          # NEW
+        
 
         package_dir = get_package_share_directory('hydro_mpc')
 
@@ -53,6 +56,8 @@ class OffboardManagerNode(Node):
         self.disarm_on_trip = bool(self.get_parameter('disarm_on_trip').get_parameter_value().bool_value)
         self.auto_reenter_after_trip = bool(self.get_parameter('auto_reenter_after_trip').get_parameter_value().bool_value)
         self.sys_id = int(self.get_parameter('sys_id').get_parameter_value().integer_value)
+        self.respect_manual = bool(self.get_parameter('respect_manual_modes').get_parameter_value().bool_value)  # NEW
+        self.manual_release_sec = float(self.get_parameter('manual_release_sec').get_parameter_value().double_value)  # NEW
 
         sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
         vehicle_yaml_path = os.path.join(package_dir, 'config', 'vehicle_parameters', vehicle_param_file)
@@ -133,6 +138,10 @@ class OffboardManagerNode(Node):
         self.trip_latched = False         # set True on failsafe trip
         self.offboard_blocked = False     # global disable (also set on trip)
 
+        # Manual control request states
+        self.in_manual_mode = False            
+        self._manual_since_s: float | None = None
+
         # safety
         self.mon = SafetyMonitor()
         self.get_logger().info("OffboardManagerNode initialized")
@@ -175,6 +184,16 @@ class OffboardManagerNode(Node):
             OFFBOARD, ARMED = 14, 2  # fallback (PX4 typical values)
         self.nav_offboard = (msg.nav_state == OFFBOARD)
         self.armed = (msg.arming_state == ARMED)
+
+        # detect pilot manual modes (POSCTL/ALTCTL/etc.)
+        was_manual = self.in_manual_mode
+        self.in_manual_mode = self._is_manual_nav(msg.nav_state) if self.respect_manual else False
+        if self.in_manual_mode and not was_manual:
+            self._manual_since_s = self._now_s()
+            self.get_logger().warn("Manual mode detected → pausing Offboard keepalive/requests.")
+        elif (not self.in_manual_mode) and was_manual:
+            self.get_logger().info("Left manual mode.")
+            
 
     def _on_ack(self, ack: VehicleCommandAck):
         # Map enum in a tolerant way
@@ -236,8 +255,10 @@ class OffboardManagerNode(Node):
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
 
-        # Only publish keepalive when we're actually allowing Offboard control
-        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched)
+        # Only publish keepalive when Offboard is allowed AND not in manual
+        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched)# and (not self.in_manual_mode)
+
+        # self.get_logger().info(f"self.offboard_blocked: {self.offboard_blocked} | self.in_manual_mode: {self.in_manual_mode} ")
 
         if allow_keepalive:
             now_us = int(self.get_clock().now().nanoseconds / 1000)
@@ -255,6 +276,17 @@ class OffboardManagerNode(Node):
         # 2) Decide whether we want Offboard/Arm active
         want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 
 
+        # Respect manual modes by short-circuiting desire to control
+        if self.in_manual_mode and self.respect_manual:
+            self.offboard_set = False
+            return
+        
+        # Optional dwell after leaving manual before auto re-entering
+        if (not self.in_manual_mode) and (self._manual_since_s is not None) and (self.manual_release_sec > 0.0):
+            if (self._now_s() - self._manual_since_s) < self.manual_release_sec:
+                return
+            self._manual_since_s = None
+        
         if not want_control:
             self.offboard_set = False
             return
@@ -406,6 +438,20 @@ class OffboardManagerNode(Node):
         msg.tripped = bool(tripped)
         msg.reason = str(reason or "")
         self.trip_pub.publish(msg)
+
+    def _is_manual_nav(self, nav_state: int) -> bool:                           
+        VS = VehicleStatus
+        # PX4 "pilot" modes; extend if you use others
+        manual_modes = (
+            getattr(VS, "NAVIGATION_STATE_MANUAL", 0),
+            getattr(VS, "NAVIGATION_STATE_ALTCTL", 0),
+            getattr(VS, "NAVIGATION_STATE_POSCTL", 0),
+            getattr(VS, "NAVIGATION_STATE_ACRO", 0),
+            getattr(VS, "NAVIGATION_STATE_RATTITUDE", 0),
+            getattr(VS, "NAVIGATION_STATE_STAB", 0),
+        )
+
+        return nav_state in manual_modes
 
 
     @staticmethod
