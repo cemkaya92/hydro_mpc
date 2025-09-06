@@ -8,11 +8,15 @@
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  
+  <build_depend>custom_offboard_msgs</build_depend>
+  
   <exec_depend>rclpy</exec_depend>
   <exec_depend>px4_msgs</exec_depend>
   <exec_depend>scipy</exec_depend>
   <exec_depend>numpy</exec_depend>
   <exec_depend>cvxpy</exec_depend>
+  <exec_depend>custom_offboard_msgs</exec_depend>
   
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -33,7 +33,7 @@ class MotorCommander(Node):
         self.declare_parameter('vehicle_param_file', 'crazyflie_param.yaml')
         self.declare_parameter('sitl_param_file', 'sitl_params.yaml')
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
-        self.declare_parameter('hover_thrust', 0.5)                 # normalized hover thrust magnitude (0..1)
+        self.declare_parameter('hover_thrust', 0.6)                 # normalized hover thrust magnitude (0..1)
         self.declare_parameter('thrust_limits', [0.0, 1.0])         # [min,max] magnitude before sign application
         self.declare_parameter('torque_limits', [0.3, 0.3, 0.3])    # per-axis absolute max (normalized)
         self.declare_parameter('thrust_slew_per_s', 1.5)            # max Δ per second (normalized)
@@ -105,7 +105,7 @@ class MotorCommander(Node):
         spin_dirs = [-1, 1, -1, 1]
 
         _, self.throttles_to_normalized_torques_and_thrust = ControlAllocator.generate_mixing_matrices(
-            0.5, 1.20, 1.65, angles_deg, spin_dirs
+            0.225, 1.00, 1.00, angles_deg, spin_dirs
         )
 
         # self.get_logger().info("[mixing_matrix] =\n" + np.array2string(mixing_matrix, precision=10, suppress_small=True))
