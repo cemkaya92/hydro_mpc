@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseStamped
 
 from hydro_mpc.utils.mpc_solver import MPCSolver
 
+from hydro_mpc.navigation.state_machine import NavState
 
 from hydro_mpc.utils.param_loader import ParamLoader
 
@@ -132,7 +133,8 @@ class ControllerNode(Node):
         self.plan_t0_us = None
         self.plan_data = {}     # dict: coeffs/state0/speed/yaw_rate/heading/duration/repeat/distance
  
-        self.nav_state = 1  # IDLE by default
+        self.nav_state = 1 #NavState.IDLE  # IDLE by default
+        self.dont_run = False
         
         # MPC + Timer
         self.Ts = 1.0 / self.control_params.frequency
@@ -188,8 +190,14 @@ class ControllerNode(Node):
 
     def _on_nav_state(self, msg: UInt8):
         self.nav_state = int(msg.data)
-        if self.nav_state == 0:          # 0 = IDLE
-            self._trajectory_ready = False
+        # 1=IDLE, 2=TAKEOFF, 3=LOITER, 4=FOLLOW_TARGET, 5=MISSION, 6=LANDING, 7=EMERGENCY, 8=MANUAL 
+        
+        blocked = {7, 8}                       # EMERGENCY, MANUAL
+        self.dont_run = (self.nav_state in blocked)
+
+        # self.get_logger().info(f"nav_state: {self.nav_state} | dont_run {self.dont_run} | trajectory_ready: {self._trajectory_ready} ")
+
+ 
             
 
     # ---------- main loop ----------
@@ -201,12 +209,14 @@ class ControllerNode(Node):
             self.get_logger().warn("Waiting for odometry...")
             return
 
+        if self.dont_run:
+            return
         
         # Construct the 12-dimensional state vector
         _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
 
         
-        if not self._trajectory_ready and self.nav_state != 2:
+        if not self._trajectory_ready:
             # publish hold/zero command and bail
             msg = Float32MultiArray(); 
             msg.data = [0.0, 0.0, 0.0, 0.0]

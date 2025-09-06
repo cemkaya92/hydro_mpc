@@ -10,6 +10,8 @@ from px4_msgs.msg import VehicleThrustSetpoint, VehicleTorqueSetpoint
 from hydro_mpc.utils.param_loader import ParamLoader
 from hydro_mpc.control.control_allocator import ControlAllocator
 
+from hydro_mpc.navigation.state_machine import NavState
+
 from ament_index_python.packages import get_package_share_directory
 import os
 import signal, time
@@ -38,7 +40,6 @@ class MotorCommander(Node):
         self.declare_parameter('torque_limits', [0.3, 0.3, 0.3])    # per-axis absolute max (normalized)
         self.declare_parameter('thrust_slew_per_s', 1.5)            # max Δ per second (normalized)
         self.declare_parameter('torque_slew_per_s', 3.0)            # max Δ per second (normalized)
-        self.declare_parameter('idle_nav_state', 1)             # keep your current gating by default
 
 
         vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
@@ -92,7 +93,7 @@ class MotorCommander(Node):
 
         self.allow_commands = False  # start in IDLE
 
-        self.nav_state = 1 # start in IDLE
+        self.nav_state = NavState.IDLE  # IDLE by default
 
         
         
@@ -122,7 +123,12 @@ class MotorCommander(Node):
     def _on_nav_state(self, msg: UInt8):
         #is_idle = int(self.get_parameter('idle_nav_state').get_parameter_value().integer_value)
         self.nav_state = int(msg.data)
-        self.allow_commands = True #(self.nav_state != 1)
+        # 1=IDLE, 2=TAKEOFF, 3=LOITER, 4=FOLLOW_TARGET, 5=MISSION, 6=LANDING, 7=EMERGENCY, 8=MANUAL 
+
+        blocked = {7, 8}                       # EMERGENCY, MANUAL
+        self.allow_commands = (self.nav_state not in blocked)
+
+        # self.get_logger().info(f"nav_state: {self.nav_state} | allow_commands {self.allow_commands} ")
         if not self.allow_commands:
              self._set_latest_to_neutral()
 
@@ -136,12 +142,11 @@ class MotorCommander(Node):
 
         run_motors = self.allow_commands #and is_timeout 
 
-
         if not run_motors:
-            
-            self._set_latest_to_neutral()
-            if is_timeout and not (self.nav_state == 1) :
-                self.get_logger().warn("control stream timeout -> neutral", throttle_duration_sec=1.0)
+            return
+        
+            # if is_timeout and not (self.nav_state == NavState.IDLE) :
+                # self.get_logger().warn("control stream timeout -> neutral", throttle_duration_sec=1.0)
 
         self.thrust_pub.publish(self.latest_thrust_cmd)
         self.torque_pub.publish(self.latest_torque_cmd)

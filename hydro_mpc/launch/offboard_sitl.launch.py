@@ -34,7 +34,7 @@ def generate_launch_description():
         'estimator.yaml'
     ])
 
-    venv_py = "/home/asl-simulation/venvs/vision/bin/python"   # your venv Python
+    venv_py = "/home/cem-2204/venvs/vision/bin/python"   # your venv Python
     apt_env = {"PYTHONNOUSERSITE": "1"}  # ignore ~/.local wheels for apt-based nodes
 
     return LaunchDescription([
