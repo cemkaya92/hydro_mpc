@@ -89,5 +89,8 @@ class NavStateMachine:
         elif s == NavState.MANUAL:
             if ev.have_odom and (ev.auto_start or ev.start_requested):
                 self.state = NavState.TAKEOFF
+            elif (not ev.manual_requested):
+                self.state = NavState.IDLE
+
 
         return self.state

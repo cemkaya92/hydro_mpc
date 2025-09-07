@@ -183,8 +183,9 @@ class ControllerNode(Node):
         _pos = msg.position
         _vel = msg.velocity
         #_acc = msg.acceleration
+        _yaw, _, _ = self._quat_to_eul(msg.quaternion)
 
-        self._x_ref = np.concatenate([_pos, _vel, np.zeros(3), np.zeros(3)]) # pos, vel, att, omega
+        self._x_ref = np.concatenate([_pos, _vel, np.array([0.0, 0.0, _yaw]), np.zeros(3)]) # pos, vel, att, omega
 
         self._trajectory_ready = True
 
@@ -213,8 +214,11 @@ class ControllerNode(Node):
             return
         
         # Construct the 12-dimensional state vector
-        _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
-
+        # _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
+        _x0 = np.zeros(12)
+        _x0[6:] = np.concatenate([self.rpy, self.omega_body])
+        # _x0[6] = 10.0*np.pi/180.0 
+         
         
         if not self._trajectory_ready:
             # publish hold/zero command and bail
@@ -223,7 +227,7 @@ class ControllerNode(Node):
             self.motor_cmd_pub.publish(msg)
             return
 
-        #self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
+        self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
 
         # Solve the MPC problem
         _u_mpc, _X_opt, _ = self.mpc.solve(_x0, self._x_ref)  # [thrust, tau_phi, tau_theta, tau_psi]

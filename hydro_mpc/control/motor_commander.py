@@ -106,7 +106,7 @@ class MotorCommander(Node):
         spin_dirs = [-1, 1, -1, 1]
 
         _, self.throttles_to_normalized_torques_and_thrust = ControlAllocator.generate_mixing_matrices(
-            0.225, 1.00, 1.00, angles_deg, spin_dirs
+            0.5, 1.0, 1.50, angles_deg, spin_dirs
         )
 
         # self.get_logger().info("[mixing_matrix] =\n" + np.array2string(mixing_matrix, precision=10, suppress_small=True))

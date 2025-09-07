@@ -11,7 +11,7 @@ def _bad(x) -> bool:
 
 @dataclass
 class SafetyLimits:
-    max_roll_pitch_deg: float = 20.0     # hard tilt limit
+    max_roll_pitch_deg: float = 80.0     # hard tilt limit
     max_rate_rad_s: float = 4.0          # body rate magnitude
     max_pos_err_m: float = 3.0           # ||p_ref - p||
     max_vel_err_mps: float = 3.0         # ||v_ref - v||

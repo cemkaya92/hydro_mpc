@@ -75,7 +75,21 @@ def generate_launch_description():
             description='Mission parameter file inside config/mission/'
         ),
 
-
+        Node(
+               package="v4l2_camera",
+               executable="v4l2_camera_node",
+               name="usb_camera",
+               namespace=ns_camera,
+               output="screen",
+               parameters=[{
+                    "video_device": "/dev/video0",   # Change if needed
+                    "image_size": [640, 480],        # Resolution
+                    "frame_rate": 30.0,              # FPS
+                    "pixel_format": "YUYV",          # or "MJPG" if supported
+                    "camera_name": "usb_cam",        # Name used in /camera_info
+                         "output_encoding": "yuv422_yuy2",      # v4l2_camera publishes mono8 without conversion
+               }]
+        ),
 
         Node(
             package=namePackage,
@@ -131,9 +145,35 @@ def generate_launch_description():
                 'mpc_trajectory_topic': 'mpc/trajectory',
                 'world_frame': 'map'
             }]
-        )
+        ),
         
 
+        Node(
+            package='hydro_mpc', 
+            executable='aruco_detector', 
+            name='aruco_detector',
+            namespace=ns_drone,
+            parameters=[aruco_yaml],
+            prefix=venv_py
+        ),
+
+        Node(
+            package='hydro_mpc', 
+            executable='ekf_fuser',
+            name='ekf_fuser', 
+            namespace=ns_drone,
+            parameters=[est_yaml],
+            prefix=venv_py
+        ),
+
+        Node(
+            package='tf2_ros', 
+            executable='static_transform_publisher',
+            name='camera_tf',
+            namespace=ns_drone,
+            arguments=['0','0','0',  '-1.570796','0','-1.570796',
+                        'camera_link','camera_optical_frame'],
+        )
 
     ])
 

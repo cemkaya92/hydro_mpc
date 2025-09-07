@@ -130,6 +130,8 @@ class NavigatorNode(Node):
 
         # manual states
         self.manual_requested = False
+        self._manual_true_ticks = 0
+        self._manual_false_ticks = 0
 
         # hold position states
         self._hold_p4 = None          # latched hover target [x,y,z,psi]
@@ -204,7 +206,14 @@ class NavigatorNode(Node):
     def _on_status(self, msg: VehicleStatus):
         self.nav_offboard = (msg.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD)
         self.armed = (msg.arming_state == VehicleStatus.ARMING_STATE_ARMED)
-        self.manual_requested = self._is_manual_nav(msg.nav_state) 
+        raw_manual = (not self.nav_offboard) and self._is_manual_nav(msg.nav_state)
+
+        if raw_manual:
+            self._manual_true_ticks += 1; self._manual_false_ticks = 0
+        else:
+            self._manual_false_ticks += 1; self._manual_true_ticks = 0
+        # require stability for 3 consecutive status messages (~60 ms @ 50 Hz)
+        self.manual_requested = (self._manual_true_ticks >= 3)
 
         #self.get_logger().info(f"self.manual_requested: {self.manual_requested}")
 
@@ -313,7 +322,12 @@ class NavigatorNode(Node):
         
         # select references per state
         if new == NavState.IDLE:
-            p_ref, v_ref, a_ref = self._plan_or_hold()  
+            #p_ref, v_ref, a_ref = self._plan_or_hold() 
+            p_ref = np.array([0.0, 0.0, -0.05, 0.0*np.pi/180.0])
+            v_ref = np.zeros(4)
+            a_ref = np.zeros(4)
+            self.get_logger().info(f"we are in if new == NavState.IDLE")
+
 
         elif new == NavState.TAKEOFF:
             p_ref, v_ref, a_ref = self._plan_or_hold()
@@ -338,6 +352,9 @@ class NavigatorNode(Node):
 
         else:
             p_ref, v_ref, a_ref = self._plan_or_hold()
+            self.get_logger().info(f"we are in else")
+
+        # self.get_logger().info(f"current state: {new}")
 
         # apply limiter and publish
         # p_ref, v_ref, a_ref are 4D: [x,y,z,psi], [vx,vy,vz,psi_dot], [ax,ay,az,psi_ddot]
@@ -353,9 +370,9 @@ class NavigatorNode(Node):
         v_cmd = np.array([v_cmd_xyz[0], v_cmd_xyz[1], v_cmd_xyz[2], v_ref[3]], float)
         a_cmd = np.array([a_ref[0],     a_ref[1],     a_ref[2],     0.0    ], float)  # or keep a_ref[3] if you compute ψ̈
 
-        self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+        # self._publish_cmd4(p_cmd, v_cmd, a_cmd)
 
-        #self._publish_cmd4(p_ref, v_ref, a_ref)
+        self._publish_cmd4(p_ref, v_ref, a_ref)
 
             
 
