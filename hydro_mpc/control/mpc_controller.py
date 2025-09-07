@@ -30,6 +30,8 @@ class ControllerNode(Node):
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('world_frame', 'map')
         self.declare_parameter('mpc_trajectory_topic', '/trajectory') 
+        self.declare_parameter('hover_thrust_newton', 20.0)   # match MotorCommander default
+
 
         vehicle_param_file = self.get_parameter('vehicle_param_file').get_parameter_value().string_value
         controller_param_file = self.get_parameter('controller_param_file').get_parameter_value().string_value
@@ -77,6 +79,20 @@ class ControllerNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,  # <-- ask for the stored last sample
         )
 
+        traj_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=1
+        )
+
+        control_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=1
+        )
+
         # Sub
         self.sub_odom = self.create_subscription(
             VehicleOdometry, 
@@ -91,7 +107,7 @@ class ControllerNode(Node):
         self.sub_commanded_trajectory = self.create_subscription(
             TrajectorySetpoint6dof, 
             trajectory_sub_topic, 
-            self._trajectory_callback, 10)
+            self._trajectory_callback, traj_qos)
         
         self.sub_nav_state = self.create_subscription(
             UInt8, 
@@ -102,7 +118,7 @@ class ControllerNode(Node):
         self.motor_cmd_pub = self.create_publisher(
             Float32MultiArray, 
             control_cmd_topic, 
-            10)
+            control_qos)
                         
         self.trajectory_pub = self.create_publisher(
             Path, 
@@ -185,15 +201,16 @@ class ControllerNode(Node):
         #_acc = msg.acceleration
         _yaw, _, _ = self._quat_to_eul(msg.quaternion)
 
-        self._x_ref = np.concatenate([_pos, _vel, np.array([0.0, 0.0, _yaw]), np.zeros(3)]) # pos, vel, att, omega
+        # self._x_ref = np.concatenate([_pos, _vel, np.array([0.0, 0.0, _yaw]), np.zeros(3)]) # pos, vel, att, omega
+        self._x_ref = np.concatenate([_pos, _vel, np.zeros(3), np.zeros(3)]) # pos, vel, att, omega
 
         self._trajectory_ready = True
 
     def _on_nav_state(self, msg: UInt8):
         self.nav_state = int(msg.data)
-        # 1=IDLE, 2=TAKEOFF, 3=LOITER, 4=FOLLOW_TARGET, 5=MISSION, 6=LANDING, 7=EMERGENCY, 8=MANUAL 
+        # 1=IDLE, 2=HOLD, 3=TAKEOFF, 4=LOITER, 5=FOLLOW_TARGET, 6=MISSION, 7=LANDING, 8=EMERGENCY, 9=MANUAL 
         
-        blocked = {7, 8}                       # EMERGENCY, MANUAL
+        blocked = {1, 8, 9}                       # IDLE, EMERGENCY, MANUAL
         self.dont_run = (self.nav_state in blocked)
 
         # self.get_logger().info(f"nav_state: {self.nav_state} | dont_run {self.dont_run} | trajectory_ready: {self._trajectory_ready} ")
@@ -213,21 +230,23 @@ class ControllerNode(Node):
         if self.dont_run:
             return
         
+
+        
         # Construct the 12-dimensional state vector
-        # _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
-        _x0 = np.zeros(12)
-        _x0[6:] = np.concatenate([self.rpy, self.omega_body])
+        _x0 = np.concatenate([self.pos, self.vel, self.rpy, self.omega_body])
+        # _x0 = np.zeros(12)
+        # _x0[6:] = np.concatenate([self.rpy, self.omega_body])
         # _x0[6] = 10.0*np.pi/180.0 
          
         
         if not self._trajectory_ready:
-            # publish hold/zero command and bail
+            h = float(self.get_parameter('hover_thrust_newton').get_parameter_value().double_value)
             msg = Float32MultiArray(); 
-            msg.data = [0.0, 0.0, 0.0, 0.0]
+            msg.data = [h, 0.0, 0.0, 0.0]
             self.motor_cmd_pub.publish(msg)
             return
 
-        self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
+        # self.get_logger().info(f"_x0= {_x0} | _x_ref= {self._x_ref}")
 
         # Solve the MPC problem
         _u_mpc, _X_opt, _ = self.mpc.solve(_x0, self._x_ref)  # [thrust, tau_phi, tau_theta, tau_psi]

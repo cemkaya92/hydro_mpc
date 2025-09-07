@@ -81,10 +81,10 @@ class NavigatorNode(Node):
 
 
         limiter_cfg = RateLimitConfig(
-            err_pos_cap=np.array([1.5,1.5,1.0]),
-            err_vel_cap=np.array([3.0,3.0,1.0]),
-            ref_v_cap=np.array([5.0,5.0,3.0]),
-            ref_a_cap=np.array([5.0,5.0,3.0]),
+            err_pos_cap=np.array([1.0,1.0,0.5]),
+            err_vel_cap=np.array([1.0,1.0,0.5]),
+            ref_v_cap=np.array([2.0,2.0,1.0]),
+            ref_a_cap=np.array([3.0,3.0,2.0]),
         )
         self.limiter = SafetyRateLimiter(limiter_cfg)
 
@@ -127,6 +127,7 @@ class NavigatorNode(Node):
         self.allow_offboard_output = True        # master gate for Offboard setpoints
         self.in_offboard_last = None             # for logging transitions (optional)
         self.suppress_plan_output = False
+        self.allow_offboard_output = True
 
         # manual states
         self.manual_requested = False
@@ -151,6 +152,13 @@ class NavigatorNode(Node):
             depth=1
         )
 
+        traj_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=1
+        )
+
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -167,7 +175,7 @@ class NavigatorNode(Node):
         # publisher lives in TrajectoryManager.publish_traj(); create here:
         # (we import the class there to resolve msg type)
         
-        self.traj_pub = self.create_publisher(TrajMsg, traj_topic, 10)
+        self.traj_pub = self.create_publisher(TrajMsg, traj_topic, traj_qos)
         self.nav_state_pub = self.create_publisher(UInt8, nav_state_topic, trip_qos)
 
         # Services
@@ -292,10 +300,12 @@ class NavigatorNode(Node):
         landing_needed = (self.sm.state == NavState.FOLLOW_TARGET and
                           target_fresh and (dist_to_target < self.mission.landing.trigger_radius) and
                           ((self.pos[2] - self.mission.landing.final_altitude) > 0.15))
-        landing_done = (self.sm.state == NavState.LANDING and
-                        (self.pos[2] <= self.mission.landing.final_altitude + 0.05) and (np.linalg.norm(self.vel) < 0.3))
-
         
+                        
+        grounded = bool((self.pos[2] >= self.mission.landing.final_altitude - 0.05) and (np.linalg.norm(self.vel) < 0.3))
+        
+        landing_done = bool(self.sm.state == NavState.LANDING and grounded)
+                        
         #self.get_logger().info(f"State: {self.sm.state} | at_takeoff: {at_takeoff}: {np.linalg.norm(self.pos - self.mission.takeoff.waypoint)}: {np.linalg.norm(self.vel)}")
 
         ev = NavEvents(
@@ -307,6 +317,7 @@ class NavigatorNode(Node):
             at_destination=bool(self.at_destination),
             landing_needed=bool(landing_needed),
             landing_done=bool(landing_done),
+            grounded=bool(grounded),
             start_requested=bool(self.start_requested),
             halt_condition=bool(self.halt_condition),
             mission_valid=bool(self.mission_valid),
@@ -319,21 +330,19 @@ class NavigatorNode(Node):
         if new != prev:
             self._on_state_change(prev, new)
 
-        
-        # select references per state
-        if new == NavState.IDLE:
-            #p_ref, v_ref, a_ref = self._plan_or_hold() 
-            p_ref = np.array([0.0, 0.0, -0.05, 0.0*np.pi/180.0])
-            v_ref = np.zeros(4)
-            a_ref = np.zeros(4)
-            self.get_logger().info(f"we are in if new == NavState.IDLE")
 
+        # select references per state (HOLD uses latched hover)
+        if new == NavState.HOLD:
+            p_ref, v_ref, a_ref = self._plan_or_hold()   # HOLD behavior
 
         elif new == NavState.TAKEOFF:
             p_ref, v_ref, a_ref = self._plan_or_hold()
 
         elif new == NavState.LOITER:
             p_ref, v_ref, a_ref = self._plan_or_hold()  
+
+        elif new == NavState.MISSION:
+            p_ref, v_ref, a_ref = self._plan_or_hold() 
 
         elif new == NavState.FOLLOW_TARGET:
             p_ref, v_ref, a_ref = self._plan_or_hold()
@@ -351,8 +360,7 @@ class NavigatorNode(Node):
             p_ref, v_ref, a_ref = self._plan_or_hold()
 
         else:
-            p_ref, v_ref, a_ref = self._plan_or_hold()
-            self.get_logger().info(f"we are in else")
+            return
 
         # self.get_logger().info(f"current state: {new}")
 
@@ -370,9 +378,9 @@ class NavigatorNode(Node):
         v_cmd = np.array([v_cmd_xyz[0], v_cmd_xyz[1], v_cmd_xyz[2], v_ref[3]], float)
         a_cmd = np.array([a_ref[0],     a_ref[1],     a_ref[2],     0.0    ], float)  # or keep a_ref[3] if you compute ψ̈
 
-        # self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+        self._publish_cmd4(p_cmd, v_cmd, a_cmd)
 
-        self._publish_cmd4(p_ref, v_ref, a_ref)
+        # self._publish_cmd4(p_ref, v_ref, a_ref)
 
             
 
@@ -380,7 +388,8 @@ class NavigatorNode(Node):
 
         self.get_logger().info(f"State: {prev.name} -> {state.name}")
 
-        if state in (NavState.TAKEOFF, NavState.LOITER, NavState.FOLLOW_TARGET, NavState.MISSION):
+        if state in (NavState.TAKEOFF, NavState.LOITER, NavState.FOLLOW_TARGET, NavState.MISSION, NavState.HOLD, NavState.LANDING):
+            self.allow_offboard_output = True # we will publish Offboard refs
             self.suppress_plan_output = False
 
         if state == NavState.TAKEOFF:
@@ -421,12 +430,23 @@ class NavigatorNode(Node):
         elif state == NavState.LANDING:
             self._plan_landing()
 
+        elif state == NavState.HOLD:
+            # Entering HOLD → enable “latched hover” behavior
+            self.allow_offboard_output = True
+            self.suppress_plan_output = True   # tells _plan_or_hold to hover
+            self._hold_mode_prev = False       # force re-latch on entry
+            self.limiter.reset()
+
+
         elif state == NavState.IDLE:
+            # On-ground idle: stop Offboard setpoints, clear plans
+            self.allow_offboard_output = False
             self.suppress_plan_output = True   # hold in IDLE
             self._clear_active_plan()          # drop any plan still in TM
             self.halt_condition = False        # you already had this line
 
         elif state == NavState.MANUAL:
+            self.allow_offboard_output = False
             self.suppress_plan_output = True
             self._clear_active_plan()
             self.halt_condition = False
@@ -444,13 +464,13 @@ class NavigatorNode(Node):
 
     def _plan_or_hold(self):
         """Return plan ref; if we're in hold, return a latched hover target."""
-        in_hold = (self.suppress_plan_output or self.sm.state == NavState.IDLE)
+        in_hold = (self.suppress_plan_output or self.sm.state == NavState.HOLD)
 
         # Rising edge: just entered hold → latch the current pose once
         if in_hold and not self._hold_mode_prev:
             self._hold_p4 = self._current_p4().copy()
             self.limiter.reset()          # optional: avoid step-limited drift
-            # self.get_logger().info(f"[Navigator] HOLD latched at {self._hold_p4}")
+            self.get_logger().info(f"[Navigator] HOLD latched at {self._hold_p4}")
 
         # Update edge tracker
         self._hold_mode_prev = in_hold
@@ -649,7 +669,7 @@ class NavigatorNode(Node):
         return resp
 
     def _srv_halt_mission(self, req, resp):
-        # Ask the SM to go back to IDLE; we'll hold position there
+        # Request HOLD (state machine interprets halt_condition → HOLD)
         self.halt_condition = True
         # Clear any outstanding start request so we don't immediately re-enter
         self.start_requested = False
@@ -657,7 +677,6 @@ class NavigatorNode(Node):
         self.trajectory_fresh = False
         self.auto_start = False            # don’t immediately leave IDLE again
         self.suppress_plan_output = True   # force HOLD outputs
-        self._clear_active_plan()          # purge any active mission plan
         resp.success = True
         resp.message = "Mission halt requested."
         return resp

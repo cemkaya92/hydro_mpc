@@ -36,6 +36,7 @@ class MotorCommander(Node):
         self.declare_parameter('sitl_param_file', 'sitl_params.yaml')
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
         self.declare_parameter('hover_thrust', 0.6)                 # normalized hover thrust magnitude (0..1)
+        self.declare_parameter('idle_thrust', 0.2)                  # normalized idle thrust magnitude (0..1)
         self.declare_parameter('thrust_limits', [0.0, 1.0])         # [min,max] magnitude before sign application
         self.declare_parameter('torque_limits', [0.3, 0.3, 0.3])    # per-axis absolute max (normalized)
         self.declare_parameter('thrust_slew_per_s', 1.5)            # max Δ per second (normalized)
@@ -71,7 +72,7 @@ class MotorCommander(Node):
 
         
         # sub
-        self.create_subscription(Float32MultiArray, control_command_topic, self.control_cmd_callback, 10)
+        self.create_subscription(Float32MultiArray, control_command_topic, self.control_cmd_callback, qos)
         self.create_subscription(UInt8, nav_state_topic, self._on_nav_state, qos)
 
         # pub
@@ -123,14 +124,14 @@ class MotorCommander(Node):
     def _on_nav_state(self, msg: UInt8):
         #is_idle = int(self.get_parameter('idle_nav_state').get_parameter_value().integer_value)
         self.nav_state = int(msg.data)
-        # 1=IDLE, 2=TAKEOFF, 3=LOITER, 4=FOLLOW_TARGET, 5=MISSION, 6=LANDING, 7=EMERGENCY, 8=MANUAL 
+        # 1=IDLE, 2=HOLD, 3=TAKEOFF, 4=LOITER, 5=FOLLOW_TARGET, 6=MISSION, 7=LANDING, 8=EMERGENCY, 9=MANUAL 
 
-        blocked = {7, 8}                       # EMERGENCY, MANUAL
+        blocked = {8, 9}                       # EMERGENCY, MANUAL
         self.allow_commands = (self.nav_state not in blocked)
 
         # self.get_logger().info(f"nav_state: {self.nav_state} | allow_commands {self.allow_commands} ")
-        if not self.allow_commands:
-             self._set_latest_to_neutral()
+
+            
 
     # ---------- timers ----------
     def motor_command_timer_callback(self):
@@ -140,13 +141,17 @@ class MotorCommander(Node):
         timeout_ms = int(self.get_parameter('cmd_timeout_ms').get_parameter_value().integer_value)
         is_timeout = (now_us - self._last_cmd_time_us > timeout_ms * 1000)
 
-        run_motors = self.allow_commands #and is_timeout 
+        #self.allow_commands #and is_timeout 
 
-        if not run_motors:
+        if not self.allow_commands:
             return
         
             # if is_timeout and not (self.nav_state == NavState.IDLE) :
                 # self.get_logger().warn("control stream timeout -> neutral", throttle_duration_sec=1.0)
+
+        if (self.nav_state == 1): # IDLE
+            self._set_latest_to_idle()
+
 
         self.thrust_pub.publish(self.latest_thrust_cmd)
         self.torque_pub.publish(self.latest_torque_cmd)
@@ -208,27 +213,27 @@ class MotorCommander(Node):
         hmin, hmax = self.get_parameter('thrust_limits').get_parameter_value().double_array_value or [0.0, 1.0]
         ntt[3] = float(np.clip(ntt[3], hmin, hmax))
 
-        # slew limiting
-        t_slew = float(self.get_parameter('torque_slew_per_s').get_parameter_value().double_value)
-        h_slew = float(self.get_parameter('thrust_slew_per_s').get_parameter_value().double_value)
+        # # slew limiting
+        # t_slew = float(self.get_parameter('torque_slew_per_s').get_parameter_value().double_value)
+        # h_slew = float(self.get_parameter('thrust_slew_per_s').get_parameter_value().double_value)
 
-        max_step_t = t_slew * self.dt
-        max_step_t_arr = np.asarray(max_step_t, dtype=float).ravel()
-        if max_step_t_arr.size == 1:
-            max_step_t_vec = np.repeat(max_step_t_arr, 3)
-        elif max_step_t_arr.size == 3:
-            max_step_t_vec = max_step_t_arr
-        else:
-            raise ValueError("torque_slew_per_s must be scalar or length-3")
+        # max_step_t = t_slew * self.dt
+        # max_step_t_arr = np.asarray(max_step_t, dtype=float).ravel()
+        # if max_step_t_arr.size == 1:
+        #     max_step_t_vec = np.repeat(max_step_t_arr, 3)
+        # elif max_step_t_arr.size == 3:
+        #     max_step_t_vec = max_step_t_arr
+        # else:
+        #     raise ValueError("torque_slew_per_s must be scalar or length-3")
 
-        lb = self._last_ntt[0:3] - max_step_t_vec          # all (3,)
-        ub = self._last_ntt[0:3] + max_step_t_vec
-        ntt[0:3] = np.clip(ntt[0:3], lb, ub)               # 1-D slice
+        # lb = self._last_ntt[0:3] - max_step_t_vec          # all (3,)
+        # ub = self._last_ntt[0:3] + max_step_t_vec
+        # ntt[0:3] = np.clip(ntt[0:3], lb, ub)               # 1-D slice
 
-        max_step_h = h_slew * self.dt
+        # max_step_h = h_slew * self.dt
 
 
-        ntt[3] = float(np.clip(ntt[3], self._last_ntt[3] - max_step_h, self._last_ntt[3] + max_step_h))
+        # ntt[3] = float(np.clip(ntt[3], self._last_ntt[3] - max_step_h, self._last_ntt[3] + max_step_h))
 
 
         # --- Store for next tick & for messages ---
@@ -255,19 +260,23 @@ class MotorCommander(Node):
 
 
     # ---------- neutral helpers ----------
-    def _set_latest_to_neutral(self):
+    def _set_latest_to_idle(self):
 
-        hover = float(self.get_parameter('hover_thrust').get_parameter_value().double_value)
+        now_us = int(self.get_clock().now().nanoseconds / 1000)
+
+        idle_thrust = float(self.get_parameter('idle_thrust').get_parameter_value().double_value)
+        self.latest_thrust_cmd.timestamp = now_us
         self.latest_thrust_cmd.xyz[0] = 0.0
         self.latest_thrust_cmd.xyz[1] = 0.0
-        self.latest_thrust_cmd.xyz[2] = -hover
+        self.latest_thrust_cmd.xyz[2] = -idle_thrust
 
+        self.latest_torque_cmd.timestamp = now_us
         self.latest_torque_cmd.xyz[0] = 0.0
         self.latest_torque_cmd.xyz[1] = 0.0
         self.latest_torque_cmd.xyz[2] = 0.0
         
 
-    def _publish_neutral_once(self):
+    def _publish_idle_once(self):
         # call only while the context is still valid
         now = int(self.get_clock().now().nanoseconds / 1000)
         self.latest_thrust_cmd.timestamp = now
@@ -300,12 +309,12 @@ def main(args=None):
             exe.spin_once(timeout_sec=0.1)
     finally:
         # 1) immediately switch desired command to neutral
-        node._set_latest_to_neutral()
+        node._set_latest_to_idle()
 
         # 2) publish a short neutral burst while the context is STILL valid
         deadline = time.time() + 0.3  # ~300 ms
         while time.time() < deadline and rclpy.ok():
-            node._publish_neutral_once()
+            node._publish_idle_once()
             exe.spin_once(timeout_sec=0.0)  # flush any pending work
             time.sleep(0.02)               # ~50 Hz
 

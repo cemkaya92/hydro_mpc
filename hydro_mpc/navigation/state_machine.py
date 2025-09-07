@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 class NavState(Enum):
     IDLE = auto()
+    HOLD = auto()
     TAKEOFF = auto()
     LOITER = auto()
     FOLLOW_TARGET = auto()
@@ -16,6 +17,7 @@ class NavState(Enum):
 @dataclass
 class NavEvents:
     have_odom: bool
+    grounded: bool
     auto_start: bool
     target_fresh: bool
     trajectory_fresh: bool
@@ -38,12 +40,12 @@ class NavStateMachine:
 
     def step(self, ev: NavEvents) -> NavState:
 
-        # Global halt: drop to IDLE from any non-emergency state
+        # Global halt: go to HOLD (air) unless EMERGENCY forces landing
         if ev.halt_condition:
-            if self.state != NavState.EMERGENCY:
-                self.state = NavState.IDLE
-            else:
+            if self.state == NavState.EMERGENCY:
                 self.state = NavState.LANDING
+            else:
+                self.state = NavState.HOLD
             return self.state
     
         if ev.manual_requested:
@@ -62,35 +64,50 @@ class NavStateMachine:
                 elif ev.mission_valid:
                     self.state = NavState.MISSION
                 else:
-                    self.state = NavState.LOITER 
+                    self.state = NavState.HOLD   # reached TO altitude but nothing to do → HOLD
 
         elif s == NavState.LOITER:
             if ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
 
+        elif s == NavState.HOLD:
+            # HOLD is a “stable hover”. From here we can pick up a mission/target.
+            if ev.target_fresh:
+                self.state = NavState.FOLLOW_TARGET
+            elif ev.mission_valid and ev.start_requested:
+                self.state = NavState.MISSION
+            # If we end up grounded (e.g., disarm/landed), drop to IDLE.
+            # elif ev.grounded:
+            #     self.state = NavState.IDLE
+
+
         elif s == NavState.MISSION:
             if ev.landing_needed:
                 self.state = NavState.LANDING
             elif not ev.mission_valid:
-                self.state = NavState.LOITER          # mission was invalidated; fall back
+                self.state = NavState.HOLD          # mission invalid → HOLD
             elif ev.at_destination:
-                self.state = NavState.LOITER          # finished the track; loiter
+                self.state = NavState.HOLD          # finished track → HOLD
 
         elif s == NavState.FOLLOW_TARGET:
             if ev.landing_needed:
                 self.state = NavState.LANDING
             elif not ev.target_fresh:
-                self.state = NavState.LOITER
+                self.state = NavState.HOLD
 
         elif s == NavState.LANDING:
             if (ev.landing_done or ev.at_destination):
                 self.state = NavState.IDLE
 
         elif s == NavState.MANUAL:
-            if ev.have_odom and (ev.auto_start or ev.start_requested):
+            if (not ev.manual_requested):
+                if ev.grounded:
+                    # self.state = NavState.IDLE 
+                    self.state = NavState.HOLD
+                else:
+                    self.state = NavState.HOLD
+            elif ev.have_odom and ev.start_requested:
                 self.state = NavState.TAKEOFF
-            elif (not ev.manual_requested):
-                self.state = NavState.IDLE
 
 
         return self.state
