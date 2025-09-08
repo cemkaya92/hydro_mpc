@@ -107,9 +107,12 @@ class TrajectoryPublisherNode(Node):
         timeout_ms = int(self.get_parameter('cmd_timeout_ms').get_parameter_value().integer_value)
         is_timeout = (self._now_us() - self._last_cmd_time_us > timeout_ms * 1000)
 
-        self.get_logger().info(f"Just before idle, state: {self.nav_state} {int(NavState.MANUAL)} {int(NavState.IDLE)}")
+        idle_number = int(NavState.IDLE)
+        manual_number = int(NavState.MANUAL)
+
+        self.get_logger().info(f"Just before idle, state: {self.nav_state} {idle_number} {manual_number}")
         # Always stream a safe keepalive in IDLE so PX4 accepts Offboard later
-        if (self.nav_state == int(NavState.IDLE) or self.nav_state == int(NavState.MANUAL)):
+        if (self.nav_state == idle_number or self.nav_state == manual_number):
             self.get_logger().info(f"sending idle setpoints")
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
