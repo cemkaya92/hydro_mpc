@@ -29,7 +29,7 @@ class TrajectoryPublisherNode(Node):
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('publish_rate_hz', 50.0)               
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
-        self.declare_parameter('prime_offboard_ms', 800)
+        self.declare_parameter('prime_offboard_ms', 2800)
 
 
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
@@ -130,6 +130,7 @@ class TrajectoryPublisherNode(Node):
         self._prime_until_us = self._now_us() + prime_ms * 1000
         res.success = True
         res.message = f"Primed for {prime_ms} ms"
+        self.get_logger().info(f"Primed for {prime_ms} ms")
         return res
 
 
