@@ -50,8 +50,8 @@ class OffboardManagerNode(Node):
         
         # ---- Priming controls (so PX4 accepts OFFBOARD cleanly) ----
         self.declare_parameter('prime_service', 'prime_offboard')         # service offered by trajectory publisher
-        self.declare_parameter('prime_before_offboard_ms', 2800)           # how long it will stream in MANUAL
-        self.declare_parameter('prime_cooldown_s', 5.0)                   # avoid spamming the service
+        self.declare_parameter('prime_before_offboard_ms', 20800)           # how long it will stream in MANUAL
+        self.declare_parameter('prime_cooldown_s', 22.0)                   # avoid spamming the service
 
 
         package_dir = get_package_share_directory('hydro_mpc')
