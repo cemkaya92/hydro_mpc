@@ -379,9 +379,9 @@ class NavigatorNode(Node):
         v_cmd = np.array([v_cmd_xyz[0], v_cmd_xyz[1], v_cmd_xyz[2], v_ref[3]], float)
         a_cmd = np.array([a_ref[0],     a_ref[1],     a_ref[2],     0.0    ], float)  # or keep a_ref[3] if you compute ψ̈
 
-        self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+        # self._publish_cmd4(p_cmd, v_cmd, a_cmd)
 
-        # self._publish_cmd4(p_ref, v_ref, a_ref)
+        self._publish_cmd4(p_ref, v_ref, a_ref)
 
             
 
