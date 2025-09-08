@@ -168,16 +168,17 @@ class TrajectoryPublisherNode(Node):
         
         # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused'
         # ts.position = [math.nan, math.nan, math.nan]
-        # ts.acceleration = [math.nan, math.nan, math.nan]
+        ts.acceleration = [math.nan, math.nan, math.nan]
         ts.position = [0.0, 0.0, 0.0]
-        ts.acceleration = [0.0, 0.0, 0.0]
+        # ts.acceleration = [0.0, 0.0, 0.0]
 
         # Command zero velocity (safe hold)
-        ts.velocity = [0.0, 0.0, 0.0]
+        # ts.velocity = [0.0, 0.0, 0.0]
+        ts.velocity = [math.nan, math.nan, math.nan]
 
         # Yaw/yawspeed: ignore yaw, zero yaw rate
-        ts.yaw = 0.0
-        ts.yawspeed = 0.0
+        ts.yaw = math.nan
+        ts.yawspeed = math.nan
         return ts
     
     def _nav_state_enum(self) -> 'NavState':
