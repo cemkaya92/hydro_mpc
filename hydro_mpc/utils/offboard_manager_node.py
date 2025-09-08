@@ -292,9 +292,9 @@ class OffboardManagerNode(Node):
             offboard = OffboardControlMode()
             offboard.timestamp = now_us
             offboard.position = True
-            offboard.velocity = True
-            offboard.acceleration = True
-            offboard.attitude = True
+            offboard.velocity = False
+            offboard.acceleration = False
+            offboard.attitude = False
             offboard.body_rate = False
             offboard.thrust_and_torque = False
             offboard.direct_actuator = False
