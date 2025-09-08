@@ -466,6 +466,7 @@ class NavigatorNode(Node):
     def _plan_or_hold(self):
         """Return plan ref; if we're in hold, return a latched hover target."""
         in_hold = (self.suppress_plan_output or self.sm.state == NavState.HOLD)
+        self.get_logger().info(f"in_hold: {in_hold}")
 
         # Rising edge: just entered hold → latch the current pose once
         if in_hold and not self._hold_mode_prev:
@@ -478,7 +479,13 @@ class NavigatorNode(Node):
 
         if in_hold:
             # Use the latched pose every tick (do NOT refresh it)
-            p = self._hold_p4 if self._hold_p4 is not None else self._current_p4()
+            self.get_logger().info(f"inside if in_hold {self._hold_p4}")
+            if self._hold_p4 is not None:
+                p = self._hold_p4 
+            else:
+                p = self._current_p4()
+                self.get_logger().info(f"p is resetted")
+
             v = np.zeros(4, dtype=float)
             a = np.zeros(4, dtype=float)
             return p.copy(), v, a
