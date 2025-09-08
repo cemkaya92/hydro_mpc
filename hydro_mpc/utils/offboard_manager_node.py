@@ -346,31 +346,31 @@ class OffboardManagerNode(Node):
         # 2) Decide whether we want Offboard/Arm active
         want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 
 
-        if want_control:
-            fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
+        # if want_control:
+        #     fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
             
-            # If we don't yet have fresh setpoints, ask trajectory node to prime (in MANUAL) briefly.
-            # Also helpful even when 'fresh' is True, just before arming/offboard, so PX4 sees a stream.
-            self._prime_setpoints()
+        #     # If we don't yet have fresh setpoints, ask trajectory node to prime (in MANUAL) briefly.
+        #     # Also helpful even when 'fresh' is True, just before arming/offboard, so PX4 sees a stream.
+        #     self._prime_setpoints()
             
-            if not fresh:
-                # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
-                return
+        #     if not fresh:
+        #         # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
+        #         return
         
-        # Respect manual modes by short-circuiting desire to control
-        if self.in_manual_mode and self.respect_manual:
-            self.offboard_set = False
-            return
+        # # Respect manual modes by short-circuiting desire to control
+        # if self.in_manual_mode and self.respect_manual:
+        #     self.offboard_set = False
+        #     return
         
-        # Optional dwell after leaving manual before auto re-entering
-        if (not self.in_manual_mode) and (self._manual_since_s is not None) and (self.manual_release_sec > 0.0):
-            if (self._now_s() - self._manual_since_s) < self.manual_release_sec:
-                return
-            self._manual_since_s = None
+        # # Optional dwell after leaving manual before auto re-entering
+        # if (not self.in_manual_mode) and (self._manual_since_s is not None) and (self.manual_release_sec > 0.0):
+        #     if (self._now_s() - self._manual_since_s) < self.manual_release_sec:
+        #         return
+        #     self._manual_since_s = None
         
-        if not want_control:
-            self.offboard_set = False
-            return
+        # if not want_control:
+        #     self.offboard_set = False
+        #     return
     
         # 3) Stage ARM first, then OFFBOARD (with ACK + status verification)
         # (A) Request ARM if not armed (respect gating above: odom present, setpoint fresh, not manual)
