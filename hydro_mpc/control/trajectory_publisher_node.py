@@ -161,8 +161,8 @@ class TrajectoryPublisherNode(Node):
         """Zero-velocity hold; all other fields ignored (NaN)."""
         ts = TrajectorySetpoint()
         ts.timestamp = self._now_us()
-
-        # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused')
+        
+        # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused'
         # ts.position = [math.nan, math.nan, math.nan]
         # ts.acceleration = [math.nan, math.nan, math.nan]
         ts.position = [0.0, 0.0, 0.0]
