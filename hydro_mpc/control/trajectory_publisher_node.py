@@ -6,6 +6,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from px4_msgs.msg import TrajectorySetpoint6dof, TrajectorySetpoint
 from std_msgs.msg import UInt8
 
+from std_srvs.srv import Trigger
+
 from hydro_mpc.navigation.state_machine import NavState
 
 from hydro_mpc.utils.param_loader import ParamLoader
@@ -27,6 +29,7 @@ class TrajectoryPublisherNode(Node):
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
         self.declare_parameter('publish_rate_hz', 50.0)               
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
+        self.declare_parameter('prime_offboard_ms', 800)
 
 
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
@@ -77,10 +80,18 @@ class TrajectoryPublisherNode(Node):
         self.allow_commands = False  # start in IDLE
 
         self.nav_state = NavState.IDLE
+
+        self._prime_until_us = 0
         
         # Timer
         self.timer = self.create_timer(1.0/self.rate, self._tick)
+
+
+        self.create_service(Trigger, 'prime_offboard', self._srv_prime_offboard)
+
+
         self.get_logger().info("Trajectory Publisher with Offboard control started")
+
 
 
     # ---------- callbacks ----------
@@ -114,6 +125,14 @@ class TrajectoryPublisherNode(Node):
         self._last_cmd_time_us = self._now_us()
 
 
+    def _srv_prime_offboard(self, req, res):
+        prime_ms = int(self.get_parameter('prime_offboard_ms').get_parameter_value().integer_value)
+        self._prime_until_us = self._now_us() + prime_ms * 1000
+        res.success = True
+        res.message = f"Primed for {prime_ms} ms"
+        return res
+
+
     # -------------- main loop -----------------
     def _tick(self):
 
@@ -129,6 +148,15 @@ class TrajectoryPublisherNode(Node):
         if state == NavState.IDLE:
             # self.get_logger().info("sending idle setpoints")
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
+            return
+        
+        if state == NavState.MANUAL:
+            if self._now_us() < self._prime_until_us:
+                # publish either last_traj or a safe idle setpoint
+                if self.last_traj is not None and not is_timeout:
+                    self.pub_traj_sp.publish(self._convert_to_px4_ts(self.last_traj))
+                else:
+                    self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
 
         if not self.allow_commands:

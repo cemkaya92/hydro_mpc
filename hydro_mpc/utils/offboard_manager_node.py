@@ -48,6 +48,11 @@ class OffboardManagerNode(Node):
         self.declare_parameter('respect_manual_modes', True)                       # NEW
         self.declare_parameter('manual_release_sec', 0.0)                          # NEW
         
+        # ---- Priming controls (so PX4 accepts OFFBOARD cleanly) ----
+        self.declare_parameter('prime_service', 'prime_offboard')         # service offered by trajectory publisher
+        self.declare_parameter('prime_before_offboard_ms', 800)           # how long it will stream in MANUAL
+        self.declare_parameter('prime_cooldown_s', 1.0)                   # avoid spamming the service
+
 
         package_dir = get_package_share_directory('hydro_mpc')
 
@@ -58,6 +63,12 @@ class OffboardManagerNode(Node):
         self.sys_id = int(self.get_parameter('sys_id').get_parameter_value().integer_value)
         self.respect_manual = bool(self.get_parameter('respect_manual_modes').get_parameter_value().bool_value)  # NEW
         self.manual_release_sec = float(self.get_parameter('manual_release_sec').get_parameter_value().double_value)  # NEW
+
+
+        self._prime_srv_name = self.get_parameter('prime_service').get_parameter_value().string_value
+        self._prime_before_offboard_ms = int(self.get_parameter('prime_before_offboard_ms').get_parameter_value().integer_value)
+        self._prime_cooldown_s = float(self.get_parameter('prime_cooldown_s').get_parameter_value().double_value)
+
 
         sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
         vehicle_yaml_path = os.path.join(package_dir, 'config', 'vehicle_parameters', vehicle_param_file)
@@ -107,6 +118,8 @@ class OffboardManagerNode(Node):
         self.srv_enable = self.create_service(SetBool, 'offboard_manager/enable_offboard', self._srv_enable_offboard)
         self.srv_clear  = self.create_service(Trigger, 'offboard_manager/clear_trip', self._srv_clear_trip)
 
+        self._prime_client = self.create_client(Trigger, self._prime_srv_name)
+        self._last_prime_call_s = -1.0
 
         # state
         self.t0 = None
@@ -162,6 +175,8 @@ class OffboardManagerNode(Node):
         # publish an initial "not tripped" state so late subscribers see a benign value
         self._publish_trip(False, "")
 
+        
+
     # ---------- services ----------
     def _srv_enable_offboard(self, req: SetBool.Request, res: SetBool.Response):
         if req.data:
@@ -183,6 +198,34 @@ class OffboardManagerNode(Node):
         res.message = "Trip latch cleared."
         self.get_logger().info(res.message)
         return res
+    
+    def _prime_setpoints(self):
+        """Ask the trajectory publisher to stream TrajectorySetpoint briefly even in MANUAL."""
+        now_s = self._now_s()
+        if (self._last_prime_call_s >= 0.0) and ((now_s - self._last_prime_call_s) < self._prime_cooldown_s):
+            return  # respect cooldown
+
+        if not self._prime_client.service_is_ready():
+            # Don't block long; this runs in a timer callback.
+            self._prime_client.wait_for_service(timeout_sec=0.1)
+
+        try:
+            fut = self._prime_client.call_async(Trigger.Request())
+            # Log completion result asynchronously
+            def _done_cb(f):
+                try:
+                    resp = f.result()
+                    if resp.success:
+                        self.get_logger().info(f"Priming setpoints via '{self._prime_srv_name}' for ~{self._prime_before_offboard_ms} ms")
+                    else:
+                        self.get_logger().warn(f"Prime service responded but not successful: {resp.message}")
+                except Exception as e:
+                    self.get_logger().warn(f"Prime service call failed: {e}")
+            fut.add_done_callback(_done_cb)
+            self._last_prime_call_s = now_s
+        except Exception as e:
+            self.get_logger().warn(f"Prime service call exception: {e}")
+
     
     # ---------- callbacks ----------
     def _on_status(self, msg: VehicleStatus):
@@ -305,6 +348,11 @@ class OffboardManagerNode(Node):
 
         if want_control:
             fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
+            
+            # If we don't yet have fresh setpoints, ask trajectory node to prime (in MANUAL) briefly.
+            # Also helpful even when 'fresh' is True, just before arming/offboard, so PX4 sees a stream.
+            self._prime_setpoints()
+            
             if not fresh:
                 # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
                 return
@@ -327,6 +375,8 @@ class OffboardManagerNode(Node):
         # 3) Stage ARM first, then OFFBOARD (with ACK + status verification)
         # (A) Request ARM if not armed (respect gating above: odom present, setpoint fresh, not manual)
         if (not self.armed) and (self._pending["arm"] is None):
+            # Ensure setpoints are streaming during MANUAL right before we begin the ARM→OFFBOARD sequence
+            self._prime_setpoints()
             self.get_logger().info("First arm requested")
             self._request_arm(True)
 
@@ -340,7 +390,7 @@ class OffboardManagerNode(Node):
             and (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s  # still fresh
         )
 
-
+        
         if ready_for_offboard and (not self.nav_offboard) and (self._pending["offboard"] is None):
             self.get_logger().info("Condition met: >=10 TS since ARM → requesting OFFBOARD.")
             self._request_offboard_mode()
