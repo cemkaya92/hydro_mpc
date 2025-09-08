@@ -128,6 +128,10 @@ class OffboardManagerNode(Node):
         self._last_ts_setpoint_s = -1.0
         self._setpoint_max_age_s = 0.25
 
+        self._ts_count_since_arm = 0
+        self._prev_armed = False
+        self._armed_since_s = None
+
         # control flags
         self.offboard_set = False
         self.nav_offboard = False
@@ -189,6 +193,13 @@ class OffboardManagerNode(Node):
             OFFBOARD, ARMED = 14, 2  # fallback (PX4 typical values)
         self.nav_offboard = (msg.nav_state == OFFBOARD)
         self.armed = (msg.arming_state == ARMED)
+
+        # detect arming transition to start counting TS after ARM
+        if self.armed and not self._prev_armed:
+            self._ts_count_since_arm = 0
+            self._armed_since_s = self._now_s()
+            self.get_logger().info("ARMED: starting TrajectorySetpoint count (need 10).")
+        self._prev_armed = self.armed
 
         # detect pilot manual modes (POSCTL/ALTCTL/etc.)
         was_manual = self.in_manual_mode
@@ -260,7 +271,13 @@ class OffboardManagerNode(Node):
         self.last_cmd = np.asarray(msg.data, dtype=float)
     
     def _on_traj_sp(self, _: 'TrajectorySetpoint'):
-        self._last_ts_setpoint_s = self._now_s()
+        now = self._now_s()
+        self._last_ts_setpoint_s = now
+        # count only after we are ARMED
+        if self.armed:
+            self._ts_count_since_arm += 1
+            if self._ts_count_since_arm in (1, 5, 10):
+                self.get_logger().info(f"TS after ARM: {self._ts_count_since_arm}/10")
 
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
@@ -315,9 +332,17 @@ class OffboardManagerNode(Node):
         # Retry ARM if needed
         self._maybe_retry("arm")
 
-        # (B) Once ARMED, request OFFBOARD mode
-        if self.armed and (not self.nav_offboard) and (self._pending["offboard"] is None):
+        # (B) Once ARMED and we have seen >=10 TrajectorySetpoints, request OFFBOARD
+        ready_for_offboard = (
+            self.armed
+            and (self._ts_count_since_arm >= 10)
+            and (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s  # still fresh
+        )
+
+        if ready_for_offboard and (not self.nav_offboard) and (self._pending["offboard"] is None):
+            self.get_logger().info("Condition met: >=10 TS since ARM → requesting OFFBOARD.")
             self._request_offboard_mode()
+
 
         # Retry OFFBOARD if needed
         self._maybe_retry("offboard")
