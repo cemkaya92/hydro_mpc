@@ -12,7 +12,7 @@ from hydro_mpc.utils.param_loader import ParamLoader
 
 from ament_index_python.packages import get_package_share_directory
 import os
-
+import math
 
 
 
@@ -25,13 +25,13 @@ class TrajectoryPublisherNode(Node):
         
         # Declare param with default
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
-        self.declare_parameter('rate', 100.0)
+        self.declare_parameter('publish_rate_hz', 100.0)               
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
 
 
         sitl_param_file = self.get_parameter('sitl_param_file').get_parameter_value().string_value
 
-        self.rate = float(self.get_parameter('rate').get_parameter_value().double_value)
+        self.rate = float(self.get_parameter('publish_rate_hz').value)
 
         sitl_yaml_path = os.path.join(package_dir, 'config', 'sitl', sitl_param_file)
         
@@ -97,6 +97,7 @@ class TrajectoryPublisherNode(Node):
             
     def _traj_sub_cb(self, msg: TrajectorySetpoint6dof):
         self.last_traj = msg
+        self._last_cmd_time_us = self._now_us()
 
 
     # -------------- main loop -----------------
@@ -106,14 +107,21 @@ class TrajectoryPublisherNode(Node):
         timeout_ms = int(self.get_parameter('cmd_timeout_ms').get_parameter_value().integer_value)
         is_timeout = (self._now_us() - self._last_cmd_time_us > timeout_ms * 1000)
 
-
+        # Always stream a safe keepalive in IDLE so PX4 accepts Offboard later
+        if self.nav_state == NavState.IDLE:
+            self.pub_traj_sp.publish(self._safe_idle_setpoint())
+            return
+        
         if not self.allow_commands:
             return
         
         # If we have a trajectory, convert & publish TrajectorySetpoint
         if self.last_traj is not None:
-            traj_sp = self._convert_to_px4_ts(self.last_traj)   # NED signs handled here
+            traj_sp = self._convert_to_px4_ts(self.last_traj)
             self.pub_traj_sp.publish(traj_sp)
+        else:
+            # No upstream trajectory yet -> publish safe hold to keep Offboard alive
+            self.pub_traj_sp.publish(self._safe_idle_setpoint())
 
 
 
@@ -147,6 +155,25 @@ class TrajectoryPublisherNode(Node):
 
     def _now_us(self) -> int:
         return int(self.get_clock().now().nanoseconds/1000)
+    
+
+    def _safe_idle_setpoint(self) -> TrajectorySetpoint:
+        """Zero-velocity hold; all other fields ignored (NaN)."""
+        ts = TrajectorySetpoint()
+        ts.timestamp = self._now_us()
+
+        # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused')
+        ts.position = [math.nan, math.nan, math.nan]
+        ts.acceleration = [math.nan, math.nan, math.nan]
+
+        # Command zero velocity (safe hold)
+        ts.velocity = [0.0, 0.0, 0.0]
+
+        # Yaw/yawspeed: ignore yaw, zero yaw rate
+        ts.yaw = math.nan
+        ts.yawspeed = 0.0
+        return ts
+
 
 def main(args=None):
     rclpy.init(args=args)

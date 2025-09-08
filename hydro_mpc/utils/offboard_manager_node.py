@@ -8,7 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 
 from px4_msgs.msg import (
     VehicleCommand, OffboardControlMode, VehicleOdometry,
-    VehicleStatus, VehicleCommandAck
+    VehicleStatus, VehicleCommandAck, TrajectorySetpoint
 )
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32MultiArray, String, Bool
@@ -101,7 +101,8 @@ class OffboardManagerNode(Node):
         self.create_subscription(Float32MultiArray, control_cmd_topic, self._cmd_cb, 10)
         self.create_subscription(VehicleStatus, status_topic, self._on_status, qos)
         self.create_subscription(VehicleCommandAck, vehicle_command_ack_topic, self._on_ack, qos)
-
+        self.create_subscription(TrajectorySetpoint, sitl_yaml.get_topic("trajectory_setpoint_topic"),  self._on_traj_sp, 10)
+        
         # services (to control the latch) 
         self.srv_enable = self.create_service(SetBool, 'offboard_manager/enable_offboard', self._srv_enable_offboard)
         self.srv_clear  = self.create_service(Trigger, 'offboard_manager/clear_trip', self._srv_clear_trip)
@@ -122,6 +123,10 @@ class OffboardManagerNode(Node):
         self.have_target = False 
         self.have_odom = False
         self.last_cmd: np.ndarray | None = None
+
+        # offboard publisher states
+        self._last_ts_setpoint_s = -1.0
+        self._setpoint_max_age_s = 0.25
 
         # control flags
         self.offboard_set = False
@@ -252,11 +257,16 @@ class OffboardManagerNode(Node):
     def _cmd_cb(self, msg: Float32MultiArray):
         self.last_cmd = np.asarray(msg.data, dtype=float)
 
+        self.last_cmd = np.asarray(msg.data, dtype=float)
+    
+    def _on_traj_sp(self, _: 'TrajectorySetpoint'):
+        self._last_ts_setpoint_s = self._now_s()
+
     # ---------- timers ----------
     def _publish_offboard_keepalive(self):
 
         # Only publish keepalive when Offboard is allowed AND not in manual
-        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched)# and (not self.in_manual_mode)
+        allow_keepalive = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom# and (not self.in_manual_mode)
 
         # self.get_logger().info(f"self.offboard_blocked: {self.offboard_blocked} | self.in_manual_mode: {self.in_manual_mode} ")
 
@@ -276,6 +286,12 @@ class OffboardManagerNode(Node):
         # 2) Decide whether we want Offboard/Arm active
         want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 
 
+        if want_control:
+            fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
+            if not fresh:
+                # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
+                return
+        
         # Respect manual modes by short-circuiting desire to control
         if self.in_manual_mode and self.respect_manual:
             self.offboard_set = False
