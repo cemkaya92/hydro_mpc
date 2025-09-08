@@ -351,7 +351,7 @@ class OffboardManagerNode(Node):
             
             # If we don't yet have fresh setpoints, ask trajectory node to prime (in MANUAL) briefly.
             # Also helpful even when 'fresh' is True, just before arming/offboard, so PX4 sees a stream.
-            self._prime_setpoints()
+            # self._prime_setpoints()
             
             if not fresh:
                 # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
