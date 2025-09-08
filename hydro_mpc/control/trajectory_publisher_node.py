@@ -105,7 +105,7 @@ class TrajectoryPublisherNode(Node):
 
         if prev != state:
             self.get_logger().info(
-                f"nav_state: {state.name} ({state.value}) | allow_commands={self.allow_commands} | suppress_plan_output={self.suppress_plan_output}"
+                f"nav_state: {state.name} ({state.value}) | allow_commands={self.allow_commands}"
             )
             
             
