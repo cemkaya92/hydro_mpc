@@ -4,15 +4,15 @@ from enum import Enum, auto
 from dataclasses import dataclass
 
 class NavState(Enum):
-    IDLE = auto()
-    HOLD = auto()
-    TAKEOFF = auto()
-    LOITER = auto()
-    FOLLOW_TARGET = auto()
-    MISSION = auto()
-    LANDING = auto()
-    EMERGENCY = auto()
-    MANUAL = auto()
+    IDLE = 1
+    HOLD = 2
+    TAKEOFF = 3
+    LOITER = 4
+    FOLLOW_TARGET = 5
+    MISSION = 6
+    LANDING = 7
+    EMERGENCY = 8
+    MANUAL = 9
 
 @dataclass
 class NavEvents:
