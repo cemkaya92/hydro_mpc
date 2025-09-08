@@ -264,12 +264,12 @@ class OffboardManagerNode(Node):
             now_us = int(self.get_clock().now().nanoseconds / 1000)
             offboard = OffboardControlMode()
             offboard.timestamp = now_us
-            offboard.position = False
-            offboard.velocity = False
-            offboard.acceleration = False
-            offboard.attitude = False
+            offboard.position = True
+            offboard.velocity = True
+            offboard.acceleration = True
+            offboard.attitude = True
             offboard.body_rate = False
-            offboard.thrust_and_torque = True
+            offboard.thrust_and_torque = False
             offboard.direct_actuator = False
             self.offboard_ctrl_pub.publish(offboard)
 

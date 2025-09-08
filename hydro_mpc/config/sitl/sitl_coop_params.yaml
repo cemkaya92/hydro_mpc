@@ -19,4 +19,5 @@
       thrust_setpoints_topic: "fmu/in/vehicle_thrust_setpoint"
       torque_setpoints_topic: "fmu/in/vehicle_torque_setpoint"
       actuator_control_topic: "fmu/in/actuator_motors"
+      trajectory_setpoint_topic: "fmu/in/trajectory_setpoint"
       mocap_topic: "fmu/in/vehicle_mocap_odometry"

@@ -37,7 +37,8 @@ setup(
             'yolo_detector = hydro_mpc.perception.yolo_detector_node:main',
             'aruco_detector = hydro_mpc.perception.aruco_detector_node:main',
             'ekf_fuser = hydro_mpc.perception.ekf_fuser_node:main',
-            'wait_px4_ready = hydro_mpc.utils.wait_px4_ready:main'
+            'wait_px4_ready = hydro_mpc.utils.wait_px4_ready:main',
+            'trajectory_publisher_node = hydro_mpc.control.trajectory_publisher_node:main'
         ],
     },
 )

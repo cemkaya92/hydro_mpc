@@ -108,30 +108,15 @@ def generate_launch_description():
 
         Node(
             package=namePackage,
-            executable='motor_commander',
-            name='motor_commander',
+            executable='trajectory_publisher_node',
+            name='trajectory_publisher_node',
             namespace=ns_drone,
             output='screen',
             parameters=[{
-                'vehicle_param_file': LaunchConfiguration('vehicle_param_file'),
                 'sitl_param_file': LaunchConfiguration('sitl_param_file')
             }]
-        ),
-
-        Node(
-            package=namePackage,
-            executable='mpc_controller',
-            name='mpc_controller',
-            namespace=ns_drone,
-            output='screen',
-            parameters=[{
-                'vehicle_param_file': LaunchConfiguration('vehicle_param_file'),
-                'sitl_param_file': LaunchConfiguration('sitl_param_file'),
-                'controller_param_file': LaunchConfiguration('controller_param_file'),
-                'mpc_trajectory_topic': 'mpc/trajectory',
-                'world_frame': 'map'
-            }]
         )
+
         
 
 
