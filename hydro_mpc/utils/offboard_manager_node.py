@@ -303,22 +303,22 @@ class OffboardManagerNode(Node):
         # 2) Decide whether we want Offboard/Arm active
         want_control = (not self.offboard_blocked) and (not self.trip_latched) and self.have_odom 
 
-        if want_control:
-            fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
-            if not fresh:
-                # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
-                return
+        # if want_control:
+        #     fresh = (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s
+        #     if not fresh:
+        #         # don't try OFFBOARD yet; keep streaming OffboardControlMode until traj arrives
+        #         return
         
-        # Respect manual modes by short-circuiting desire to control
-        if self.in_manual_mode and self.respect_manual:
-            self.offboard_set = False
-            return
+        # # Respect manual modes by short-circuiting desire to control
+        # if self.in_manual_mode and self.respect_manual:
+        #     self.offboard_set = False
+        #     return
         
-        # Optional dwell after leaving manual before auto re-entering
-        if (not self.in_manual_mode) and (self._manual_since_s is not None) and (self.manual_release_sec > 0.0):
-            if (self._now_s() - self._manual_since_s) < self.manual_release_sec:
-                return
-            self._manual_since_s = None
+        # # Optional dwell after leaving manual before auto re-entering
+        # if (not self.in_manual_mode) and (self._manual_since_s is not None) and (self.manual_release_sec > 0.0):
+        #     if (self._now_s() - self._manual_since_s) < self.manual_release_sec:
+        #         return
+        #     self._manual_since_s = None
         
         if not want_control:
             self.offboard_set = False
@@ -327,6 +327,7 @@ class OffboardManagerNode(Node):
         # 3) Stage ARM first, then OFFBOARD (with ACK + status verification)
         # (A) Request ARM if not armed (respect gating above: odom present, setpoint fresh, not manual)
         if (not self.armed) and (self._pending["arm"] is None):
+            self.get_logger().info("First arm requested")
             self._request_arm(True)
 
         # Retry ARM if needed
@@ -338,8 +339,9 @@ class OffboardManagerNode(Node):
             and (self._ts_count_since_arm >= 10)
             and (self._now_s() - self._last_ts_setpoint_s) <= self._setpoint_max_age_s  # still fresh
         )
+        self.get_logger().info(f"ready_for_offboard: {ready_for_offboard}")
 
-        if ready_for_offboard and (not self.nav_offboard) and (self._pending["offboard"] is None):
+        if ready_for_offboard: #and (not self.nav_offboard) and (self._pending["offboard"] is None):
             self.get_logger().info("Condition met: >=10 TS since ARM → requesting OFFBOARD.")
             self._request_offboard_mode()
 
