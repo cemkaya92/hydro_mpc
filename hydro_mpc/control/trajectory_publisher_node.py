@@ -89,7 +89,7 @@ class TrajectoryPublisherNode(Node):
         self.nav_state = int(msg.data)
         # 1=IDLE, 2=HOLD, 3=TAKEOFF, 4=LOITER, 5=FOLLOW_TARGET, 6=MISSION, 7=LANDING, 8=EMERGENCY, 9=MANUAL 
 
-        blocked = {1, 8, 9}                       # EMERGENCY, MANUAL
+        blocked = {8, 9}                       # EMERGENCY, MANUAL
         self.allow_commands = (self.nav_state not in blocked)
 
         # self.get_logger().info(f"nav_state: {self.nav_state} | allow_commands {self.allow_commands} ")
@@ -108,7 +108,7 @@ class TrajectoryPublisherNode(Node):
         is_timeout = (self._now_us() - self._last_cmd_time_us > timeout_ms * 1000)
 
         # Always stream a safe keepalive in IDLE so PX4 accepts Offboard later
-        if self.nav_state == NavState.IDLE:
+        if (self.nav_state == NavState.IDLE or self.nav_state == NavState.MANUAL):
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
         
