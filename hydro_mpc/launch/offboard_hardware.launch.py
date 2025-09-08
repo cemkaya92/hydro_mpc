@@ -30,7 +30,7 @@ def generate_launch_description():
         description='Baudrate for Micro XRCE-DDS Agent'
     )
     xrce_ns_arg = DeclareLaunchArgument(
-        'xrce_ns', default_value='drone1',
+        'xrce_ns', default_value='',
         description='Namespace for Micro XRCE-DDS Agent'
     )
 
