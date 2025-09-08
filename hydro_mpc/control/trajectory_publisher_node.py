@@ -25,7 +25,7 @@ class TrajectoryPublisherNode(Node):
         
         # Declare param with default
         self.declare_parameter('sitl_param_file', 'sitl_param.yaml')
-        self.declare_parameter('publish_rate_hz', 100.0)               
+        self.declare_parameter('publish_rate_hz', 50.0)               
         self.declare_parameter('cmd_timeout_ms', 250)               # fail to neutral if no cmd within this window
 
 
@@ -48,7 +48,7 @@ class TrajectoryPublisherNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,
         )
 
         qos_nav_state = QoSProfile(
@@ -85,14 +85,29 @@ class TrajectoryPublisherNode(Node):
 
     # ---------- callbacks ----------
     def _on_nav_state(self, msg: UInt8):
-        #is_idle = int(self.get_parameter('idle_nav_state').get_parameter_value().integer_value)
-        self.nav_state = int(msg.data)
         # 1=IDLE, 2=HOLD, 3=TAKEOFF, 4=LOITER, 5=FOLLOW_TARGET, 6=MISSION, 7=LANDING, 8=EMERGENCY, 9=MANUAL 
 
-        self.allow_commands = (self.nav_state not in {NavState.MANUAL, NavState.EMERGENCY})
+        raw = int(msg.data)
+        prev = getattr(self, "nav_state", NavState.UNKNOWN)
 
-        # self.get_logger().info(f"nav_state: {self.nav_state} | allow_commands {self.allow_commands} ")
+        # Normalize to enum
+        try:
+            state = NavState(raw)
+        except ValueError:
+            self.get_logger().warn(f"Unknown nav_state {raw}; treating as UNKNOWN")
+            state = NavState.UNKNOWN
 
+        self.nav_state = state
+
+
+        self.allow_commands = (state not in {NavState.MANUAL, NavState.EMERGENCY})
+
+
+        if prev != state:
+            self.get_logger().info(
+                f"nav_state: {state.name} ({state.value}) | allow_commands={self.allow_commands} | suppress_plan_output={self.suppress_plan_output}"
+            )
+            
             
     def _traj_sub_cb(self, msg: TrajectorySetpoint6dof):
         self.last_traj = msg
@@ -107,25 +122,23 @@ class TrajectoryPublisherNode(Node):
         is_timeout = (self._now_us() - self._last_cmd_time_us > timeout_ms * 1000)
 
 
-        state = self._nav_state_enum()
-        self.get_logger().info(f"Just before idle, state: {state.name} ({state.value})")
+        state = self.nav_state # already an enum now
+        # self.get_logger().info(f"Just before idle, state: {state.name} ({state.value})")
 
         # Always stream a safe keepalive in IDLE/MANUAL so PX4 accepts Offboard later
-        if state in (NavState.IDLE, NavState.MANUAL):
-            self.get_logger().info("sending idle setpoints")
+        if state == NavState.IDLE:
+            # self.get_logger().info("sending idle setpoints")
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
 
         if not self.allow_commands:
-            self.get_logger().info("do not allow commands → idle keepalive")
-            self.pub_traj_sp.publish(self._safe_idle_setpoint())
+            # self.get_logger().info("do not allow commands → idle keepalive")
+            # self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
 
         if self.last_traj is not None:
             traj_sp = self._convert_to_px4_ts(self.last_traj)
             self.pub_traj_sp.publish(traj_sp)
-        else:
-            self.pub_traj_sp.publish(self._safe_idle_setpoint())
 
 
 
@@ -168,26 +181,19 @@ class TrajectoryPublisherNode(Node):
         
         # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused'
         # ts.position = [math.nan, math.nan, math.nan]
-        ts.acceleration = [math.nan, math.nan, math.nan]
+        # ts.acceleration = [math.nan, math.nan, math.nan]
         ts.position = [0.0, 0.0, 0.0]
-        # ts.acceleration = [0.0, 0.0, 0.0]
+        ts.acceleration = [0.0, 0.0, 0.0]
 
         # Command zero velocity (safe hold)
-        # ts.velocity = [0.0, 0.0, 0.0]
-        ts.velocity = [math.nan, math.nan, math.nan]
+        ts.velocity = [0.0, 0.0, 0.0]
+        # ts.velocity = [math.nan, math.nan, math.nan]
 
         # Yaw/yawspeed: ignore yaw, zero yaw rate
-        ts.yaw = math.nan
-        ts.yawspeed = math.nan
+        ts.yaw = 0.0
+        ts.yawspeed = 0.0
         return ts
     
-    def _nav_state_enum(self) -> 'NavState':
-        # Always work with the Enum, even if someone set an int elsewhere
-        try:
-            return self.nav_state if isinstance(self.nav_state, NavState) else NavState(int(self.nav_state))
-        except Exception:
-            self.get_logger().warn(f"Unknown nav_state={self.nav_state!r}; defaulting to IDLE")
-            return NavState.IDLE
 
 
 def main(args=None):

@@ -321,7 +321,8 @@ class NavigatorNode(Node):
             start_requested=bool(self.start_requested),
             halt_condition=bool(self.halt_condition),
             mission_valid=bool(self.mission_valid),
-            manual_requested=bool(self.manual_requested)
+            manual_requested=bool(self.manual_requested),
+            offboard_ok=bool(self.nav_offboard)
         )
         prev = self.sm.state
         new = self.sm.step(ev)
