@@ -89,8 +89,7 @@ class TrajectoryPublisherNode(Node):
         self.nav_state = int(msg.data)
         # 1=IDLE, 2=HOLD, 3=TAKEOFF, 4=LOITER, 5=FOLLOW_TARGET, 6=MISSION, 7=LANDING, 8=EMERGENCY, 9=MANUAL 
 
-        blocked = {8, 9}                       # EMERGENCY, MANUAL
-        self.allow_commands = (self.nav_state not in blocked)
+        self.allow_commands = (self.nav_state not in {NavState.MANUAL, NavState.EMERGENCY})
 
         # self.get_logger().info(f"nav_state: {self.nav_state} | allow_commands {self.allow_commands} ")
 
@@ -107,26 +106,25 @@ class TrajectoryPublisherNode(Node):
         timeout_ms = int(self.get_parameter('cmd_timeout_ms').get_parameter_value().integer_value)
         is_timeout = (self._now_us() - self._last_cmd_time_us > timeout_ms * 1000)
 
-        idle_number = int(NavState.IDLE)
-        manual_number = int(NavState.MANUAL)
 
-        self.get_logger().info(f"Just before idle, state: {self.nav_state} {idle_number} {manual_number}")
-        # Always stream a safe keepalive in IDLE so PX4 accepts Offboard later
-        if (self.nav_state == idle_number or self.nav_state == manual_number):
-            self.get_logger().info(f"sending idle setpoints")
+        state = self._nav_state_enum()
+        self.get_logger().info(f"Just before idle, state: {state.name} ({state.value})")
+
+        # Always stream a safe keepalive in IDLE/MANUAL so PX4 accepts Offboard later
+        if state in (NavState.IDLE, NavState.MANUAL):
+            self.get_logger().info("sending idle setpoints")
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
-        
+
         if not self.allow_commands:
-            self.get_logger().info(f"do not allow commands")
+            self.get_logger().info("do not allow commands → idle keepalive")
+            self.pub_traj_sp.publish(self._safe_idle_setpoint())
             return
-        
-        # If we have a trajectory, convert & publish TrajectorySetpoint
+
         if self.last_traj is not None:
             traj_sp = self._convert_to_px4_ts(self.last_traj)
             self.pub_traj_sp.publish(traj_sp)
         else:
-            # No upstream trajectory yet -> publish safe hold to keep Offboard alive
             self.pub_traj_sp.publish(self._safe_idle_setpoint())
 
 
@@ -181,6 +179,14 @@ class TrajectoryPublisherNode(Node):
         ts.yaw = 0.0
         ts.yawspeed = 0.0
         return ts
+    
+    def _nav_state_enum(self) -> 'NavState':
+        # Always work with the Enum, even if someone set an int elsewhere
+        try:
+            return self.nav_state if isinstance(self.nav_state, NavState) else NavState(int(self.nav_state))
+        except Exception:
+            self.get_logger().warn(f"Unknown nav_state={self.nav_state!r}; defaulting to IDLE")
+            return NavState.IDLE
 
 
 def main(args=None):
