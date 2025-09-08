@@ -89,8 +89,8 @@ class OffboardManagerNode(Node):
         )
 
         # pubs
-        self.cmd_pub = self.create_publisher(VehicleCommand, vehicle_command_topic, 10)
-        self.offboard_ctrl_pub = self.create_publisher(OffboardControlMode, offboard_control_topic, 10)
+        self.cmd_pub = self.create_publisher(VehicleCommand, vehicle_command_topic, qos)
+        self.offboard_ctrl_pub = self.create_publisher(OffboardControlMode, offboard_control_topic, qos)
         # latched trip topic (downstream nodes subscribe and react)
         self.trip_pub = self.create_publisher(SafetyTrip, 'safety/trip', trip_qos)
 
@@ -307,21 +307,22 @@ class OffboardManagerNode(Node):
             self.offboard_set = False
             return
     
-        # 3) Stage OFFBOARD first, then ARM (with ACK + status verification)
-        if not self.nav_offboard and self._pending["offboard"] is None:
-            self._request_offboard_mode()
-
-        # Retry OFFBOARD if needed
-        self._maybe_retry("offboard")
-
-        # Once OFFBOARD is active, request ARM (if not yet armed)
-        if self.nav_offboard and (not self.armed) and self._pending["arm"] is None:
+        # 3) Stage ARM first, then OFFBOARD (with ACK + status verification)
+        # (A) Request ARM if not armed (respect gating above: odom present, setpoint fresh, not manual)
+        if (not self.armed) and (self._pending["arm"] is None):
             self._request_arm(True)
 
         # Retry ARM if needed
         self._maybe_retry("arm")
 
-        # 4) Consider the switch successful only when BOTH are true
+        # (B) Once ARMED, request OFFBOARD mode
+        if self.armed and (not self.nav_offboard) and (self._pending["offboard"] is None):
+            self._request_offboard_mode()
+
+        # Retry OFFBOARD if needed
+        self._maybe_retry("offboard")
+
+        # 4) Success when BOTH are true
         self.offboard_set = self.nav_offboard and self.armed
     
 
