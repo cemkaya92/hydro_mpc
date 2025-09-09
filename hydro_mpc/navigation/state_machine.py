@@ -96,6 +96,8 @@ class NavStateMachine:
                 self.state = NavState.LANDING
             elif not ev.mission_valid or ev.at_destination:
                 self.state = NavState.HOLD
+            elif ev.target_fresh:
+                self.state = NavState.FOLLOW_TARGET
 
         elif s == NavState.FOLLOW_TARGET:
             if not ev.offboard_ok:
@@ -112,7 +114,7 @@ class NavStateMachine:
         elif s == NavState.MANUAL:
             # We only reach here when manual_requested just turned False
             if ev.grounded:
-                self.state = NavState.IDLE
+                self.state = NavState.IDLE # this should be IDLE technically
             else:
                 self.state = NavState.HOLD
 

@@ -60,9 +60,16 @@ class EkfFuserNode(Node):
 
         ])
 
+        target_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=4
+        )
+
         # State: [px,py,pz,vx,vy,vz,yaw]
         self.x = np.zeros((7,1)); self.P = np.eye(7)*1.0; self.t_last = None
-        self.pub_fused = self.create_publisher(PoseWithCovarianceStamped, 'perception/relative_pose_fused', 10)
+        self.pub_fused = self.create_publisher(PoseWithCovarianceStamped, 'perception/relative_pose_fused', target_qos)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Choose groups
@@ -189,7 +196,7 @@ class EkfFuserNode(Node):
         self._ensure_P_finite()
 
     def cb_aruco_pose(self, msg: PoseWithCovarianceStamped):
-        t = self._sec_from_stamp(msg.header.stamp)
+        t = self.get_clock().now().nanoseconds * 1e-9 #self._sec_from_stamp(msg.header.stamp)
         self._predict_to(t)
         p_cam = np.array([[msg.pose.pose.position.x],[msg.pose.pose.position.y],[msg.pose.pose.position.z]])
         p_uav = self.T_uav_base_cam[:3,:3] @ p_cam + self.T_uav_base_cam[:3,3:4]
@@ -287,6 +294,8 @@ class EkfFuserNode(Node):
         # Inflate covariance according to age & reliability
         self._apply_covariance_inflation(age, not reliable)
 
+        # reliable = True
+
         # Publish status
         # Create a stamp for the pose equal to "now"
         sec = int(t_now); nsec = int((t_now - sec) * 1e9)
@@ -326,7 +335,7 @@ class EkfFuserNode(Node):
         # --- DEBUG: print Euler angles in degrees ---
         # Only yaw is valid here (roll, pitch are undefined / huge covariance)
         yaw_deg = math.degrees(self.x[6,0])
-        self.get_logger().info(f"Detected rover Euler angles [deg]: yaw={yaw_deg:.2f}")
+        # self.get_logger().info(f"Detected rover Euler angles [deg]: yaw={yaw_deg:.2f}")
 
 
         # Build 6x6 covariance: [x y z R P Y]

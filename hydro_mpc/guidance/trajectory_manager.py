@@ -76,7 +76,7 @@ class TrajectoryManager:
             state_current=np.asarray(state0_12, float).reshape(-1),
             altitude=None,                    # keep current z unless z_mode says otherwise
             speed=float(speed),
-            yaw_rate=float(yaw_rate),
+            yaw_rate=yaw_rate,
             duration=duration,
             repeat=repeat,
             z_mode=z_mode,
@@ -84,6 +84,39 @@ class TrajectoryManager:
             yaw_mode=yaw_mode,
         )
         self._activate_plan(t_now, "arc3d", repeat, duration)
+
+    def plan_arc_by_radius_3d(
+        self,
+        t_now: float,
+        state0_12: np.ndarray,
+        speed: float,
+        radius: float,
+        cw: bool = True,
+        angle: float | None = None,
+        duration: float | None = None,
+        repeat: str = "loop",
+        z_mode: str = "hold",
+        z_rate: float = 0.0,
+        yaw_mode: str = "follow_heading",
+    ) -> None:
+        # Build a single arc segment and send it through the piecewise API
+        seg = {"type":"arc", "speed": float(speed), "radius": float(radius), "cw": bool(cw)}
+        if angle is not None and duration is None:
+            # derive T from angle
+            omega = (speed / max(0.05, abs(radius))) * (-1.0 if cw else +1.0)
+            seg["duration"] = abs(float(angle)) / max(1e-3, abs(omega))
+        else:
+            seg["duration"] = float(self.default_T) if duration is None else float(duration)
+        seg["yaw_mode"] = yaw_mode
+        seg["z_rate"] = float(z_rate)
+
+        self.gen.generate_piecewise_track_3d(
+            state_start=np.asarray(state0_12, float).reshape(-1),
+            segments=[seg],
+            repeat=repeat,
+            name="arc_by_radius",
+        )
+        self._activate_plan(t_now, "arc3d", repeat, seg["duration"])
 
     def plan_straight_3d(
         self,

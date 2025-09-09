@@ -12,6 +12,10 @@ from hydro_mpc.utils.mpc_solver import MPCSolver
 
 from hydro_mpc.navigation.state_machine import NavState
 
+from hydro_mpc.utils.helper_functions import (
+    quat_to_eul, rpy_to_quat_map
+)
+
 from hydro_mpc.utils.param_loader import ParamLoader
 
 from ament_index_python.packages import get_package_share_directory
@@ -172,7 +176,7 @@ class ControllerNode(Node):
 
         # Attitude (Quaternion to Euler)
         self.q[0],self.q[1],self.q[2],self.q[3] = msg.q
-        self.rpy[2],self.rpy[1],self.rpy[0] = self._quat_to_eul(self.q)
+        self.rpy[0],self.rpy[1],self.rpy[2] = quat_to_eul(self.q)
         
         #rot_mat = eul2rotm_py(self.rpy)
         
@@ -199,7 +203,7 @@ class ControllerNode(Node):
         _pos = msg.position
         _vel = msg.velocity
         #_acc = msg.acceleration
-        _yaw, _, _ = self._quat_to_eul(msg.quaternion)
+        _, _, _yaw = quat_to_eul(msg.quaternion)
 
         # self._x_ref = np.concatenate([_pos, _vel, np.array([0.0, 0.0, _yaw]), np.zeros(3)]) # pos, vel, att, omega
         self._x_ref = np.concatenate([_pos, _vel, np.zeros(3), np.zeros(3)]) # pos, vel, att, omega
@@ -311,7 +315,7 @@ class ControllerNode(Node):
             pose_msg.pose.position.z = float(z)
 
             if have_att:
-                qx, qy, qz, qw = self._rpy_to_quat_map(r, p, yy)
+                qx, qy, qz, qw = rpy_to_quat_map(r, p, yy)
                 pose_msg.pose.orientation.x = float(qx)
                 pose_msg.pose.orientation.y = float(qy)
                 pose_msg.pose.orientation.z = float(qz)
@@ -339,24 +343,8 @@ class ControllerNode(Node):
     def _reset_t0(self, t_now):
         self.t0 = t_now
 
-    def _quat_to_eul(self, q_xyzw):
-        # PX4: [w, x, y, z]
-        from scipy.spatial.transform import Rotation as R
-        _r = R.from_quat([q_xyzw[1], q_xyzw[2], q_xyzw[3], q_xyzw[0]])
-        return _r.as_euler('ZYX', degrees=False)
-    
-    def _rpy_to_quat_map(self, roll: float, pitch: float, yaw: float):
-        """
-        Convert MPC RPY to a quaternion consistent with the position mapping:
-        positions use (x, -y, -z), which equals a 180° rotation about X.
-        Under this change of basis: roll -> roll, pitch -> -pitch, yaw -> -yaw.
-        Returns [x,y,z,w] for geometry_msgs orientation fields.
-        """
-        from scipy.spatial.transform import Rotation as R
-        r = float(roll)
-        p = float(-pitch)
-        y = float(-yaw)
-        return R.from_euler('ZYX', [y, p, r]).as_quat()  # SciPy returns [x,y,z,w]
+
+
 
 def main(args=None):
     rclpy.init(args=args)

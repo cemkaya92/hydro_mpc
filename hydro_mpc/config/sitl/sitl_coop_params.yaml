@@ -6,7 +6,7 @@
       command_pose_topic: "command/pose"
       command_traj_topic: "command/trajectory"
       control_command_topic: "command/control"
-      target_state_topic: "target/odometry"
+      target_state_topic: "perception/relative_pose_fused"
       nav_state_topic: "navigation/state"
       odometry_topic: "fmu/out/vehicle_odometry"
       status_topic: "fmu/out/vehicle_status_v1"

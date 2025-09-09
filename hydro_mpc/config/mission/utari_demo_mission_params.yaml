@@ -2,7 +2,7 @@
   ros__parameters:
     mission:
 
-      type: "rounded_rectangle"    # "line_to" | "straight" | "arc" | "rounded_rectangle" | "racetrack_capsule"
+      type: "arc"    # "line_to" | "straight" | "arc" | "rounded_rectangle" | "racetrack_capsule"
 
       common:
         repeat: "loop"             # "none" | "loop" | "pingpong"
@@ -21,15 +21,15 @@
         # straight:
           # segment_distance: 10.0
         # arc:
-          # radius: 5.0
-          # angle: 1.57079632679
-          # yaw_rate: 0.2
-          # cw: true
-        # rounded_rectangle:
-          width: 10.0
-          height: 6.0
-          corner_radius: 1.0
+          radius: 5.0
+          #angle: 1.57079632679
+          #yaw_rate: 0.1
           cw: true
+        # rounded_rectangle:
+          # width: 10.0
+          # height: 6.0
+          # corner_radius: 1.0
+          # cw: true
         # racetrack_capsule:
         # straight_length: 12.0
         # radius: 5.0

@@ -8,6 +8,31 @@ from hydro_mpc.utils.param_types import (
     Common, StartPose, TrajParams, TakeoffParams, LoiterParams, LandingParams, TargetParams
 )
 
+def _to_f(x, name):
+    if x is None: return None
+    if isinstance(x, (int, float)): return float(x)
+    if isinstance(x, str):
+        s = x.strip().lower()
+        if s in ("", "none", "null", "nan"): return None
+        return float(s)
+    raise ValueError(f"Mission YAML: '{name}' must be a number or null, got {type(x).__name__}")
+
+
+def _to_cw(val, omega=None):
+    # prefer explicit boolean or "cw"/"ccw" string; fall back to omega sign
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("cw", "clockwise"): return True
+        if s in ("ccw", "counterclockwise", "anti-clockwise", "anticlockwise"): return False
+    if isinstance(val, (int, float)):
+        # 1 → cw, 0/negative → ccw (if someone used 1/0/-1)
+        return float(val) > 0.0
+    if omega is not None:
+        return float(omega) < 0.0
+    # default to cw if nothing else is given
+    return True
 
 
 class ParamLoader:
@@ -142,11 +167,12 @@ class ParamLoader:
             return Straight(common=c, segment_distance=float(params.get("segment_distance", 0.0)))
 
         if mtype == "arc":
-            ang = params.get("angle"); ang = None if ang is None else float(ang)
-            yr  = params.get("yaw_rate"); yr = None if yr is None else float(yr)
-            if ang is None and yr is None:
-                raise ValueError("arc mission: provide one of {angle, yaw_rate}")
-            return Arc(common=c, radius=float(params["radius"]), angle=ang, yaw_rate=yr,
+            ang = _to_f(params.get("angle"), name="angle")
+            yr  = _to_f(params.get("yaw_rate"), name="yaw_rate")
+            R   = _to_f(params.get("radius"), name="radius")
+            if ang is None and yr is None and R is None:
+                raise ValueError("arc mission: provide one of {angle, yaw_rate, radius}")
+            return Arc(common=c, radius=R, angle=ang, yaw_rate=yr,
                        cw=bool(params.get("cw", True)))
 
         if mtype == "rounded_rectangle":
@@ -250,3 +276,6 @@ class ParamLoader:
     def as_dict(self):
         """Return full parameter dictionary."""
         return self.params
+    
+
+    

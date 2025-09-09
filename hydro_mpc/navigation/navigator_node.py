@@ -8,7 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from typing import Optional
 
 from px4_msgs.msg import VehicleOdometry, VehicleStatus, VehicleCommandAck
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
 from std_msgs.msg import UInt8
 from custom_offboard_msgs.msg import SafetyTrip
@@ -23,6 +23,8 @@ from hydro_mpc.guidance.trajectory_manager import TrajectoryManager, TrajMsg
 from hydro_mpc.utils.param_types import (
     LineTo, Straight, Arc, RoundedRectangle, RacetrackCapsule
 )
+
+from hydro_mpc.utils.helper_functions import quat_to_eul
 
 
 class NavigatorNode(Node):
@@ -54,7 +56,7 @@ class NavigatorNode(Node):
         # SITL topics
         traj_topic = sitl_yaml.get_topic("command_traj_topic")
         odom_topic = sitl_yaml.get_topic("odometry_topic")
-        target_topic = sitl_yaml.get_topic("target_state_topic", default="/target/odom")
+        target_topic = sitl_yaml.get_topic("target_state_topic")
         status_topic = sitl_yaml.get_topic("status_topic")
         command_ack_topic = sitl_yaml.get_topic("vehicle_command_ack_topic")
         nav_state_topic = sitl_yaml.get_topic("nav_state_topic")
@@ -81,10 +83,10 @@ class NavigatorNode(Node):
 
 
         limiter_cfg = RateLimitConfig(
-            err_pos_cap=np.array([1.0,1.0,0.5]),
-            err_vel_cap=np.array([1.0,1.0,0.5]),
-            ref_v_cap=np.array([2.0,2.0,1.0]),
-            ref_a_cap=np.array([3.0,3.0,2.0]),
+            err_pos_cap=np.array([0.5, 0.5, 0.25]),   # m  (max ref jump away from current pos)
+            err_vel_cap=np.array([1.0, 1.0, 0.6]),    # m/s (max ref jump away from current vel)
+            ref_v_cap =np.array([0.8, 0.8, 0.5]),     # m/s (slew on position-ref per second)
+            ref_a_cap =np.array([1.5, 1.5, 1.0]),     # m/s^2 (slew on velocity-ref per second)
         )
         self.limiter = SafetyRateLimiter(limiter_cfg)
 
@@ -93,11 +95,12 @@ class NavigatorNode(Node):
         self.t_sim = 0.0
         self.pos = np.zeros(3)
         self.vel = np.zeros(3)
+        self.att_q = np.zeros(4)
         self.rpy = np.zeros(3)
         self.omega_body = np.zeros(3)
 
-        self.target_pos: Optional[np.ndarray] = None
-        self.target_vel: Optional[np.ndarray] = None
+        self.target_pos = np.zeros(3)
+        self.target_rpy = np.zeros(3)
         self.t_last_target: Optional[float] = None
 
         self.got_odom = False
@@ -138,6 +141,9 @@ class NavigatorNode(Node):
         self._hold_p4 = None          # latched hover target [x,y,z,psi]
         self._hold_mode_prev = False  # tracks rising-edge into hold mode
 
+        # target following states
+        self.target_plan_active = False
+
         # ------- IO -------
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -165,9 +171,16 @@ class NavigatorNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+
+        target_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=4
+        )
         
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos)
-        self.create_subscription(Odometry, target_topic, self._target_cb, qos)
+        self.create_subscription(PoseWithCovarianceStamped, target_topic, self._target_cb, target_qos)
         self.create_subscription(SafetyTrip, 'safety/trip', self._on_trip, trip_qos)
         self.create_subscription(VehicleStatus, status_topic, self._on_status, sensor_qos)
         self.create_subscription(VehicleCommandAck, command_ack_topic, self._on_ack, 10)
@@ -184,6 +197,11 @@ class NavigatorNode(Node):
 
         # timers
         self.timer = self.create_timer(self.Ts, self._tick)
+
+        # initial publishes
+        self._publish_nav_state()
+
+        # Constructor logs
         self.get_logger().info("NavigatorNode ready.")
 
     # ---------- callbacks ----------
@@ -192,8 +210,9 @@ class NavigatorNode(Node):
         self.last_stamp_us = int(msg.timestamp)
         self.pos = np.array(msg.position, float)
         self.vel = np.array(msg.velocity, float)
-        self.rpy[2],self.rpy[1],self.rpy[0] = self._quat_to_eul(np.array([msg.q[0],msg.q[1],msg.q[2],msg.q[3]], float))
-        
+        self.rpy[0],self.rpy[1],self.rpy[2] = quat_to_eul(msg.q)
+        self.att_q = msg.q
+
         #self.get_logger().info(f"self.rpy: {self.rpy}")
         # Body-frame Angular Velocity
         self.omega_body = np.array(msg.angular_velocity, float)
@@ -202,14 +221,35 @@ class NavigatorNode(Node):
             self.got_odom = True
             self.get_logger().info("First odometry received.")
 
-    def _target_cb(self, msg: Odometry):
-        self.target_pos = np.array([msg.pose.pose.position.x,
-                                    msg.pose.pose.position.y,
-                                    msg.pose.pose.position.z], float)
-        self.target_vel = np.array([msg.twist.twist.linear.x,
-                                    msg.twist.twist.linear.y,
-                                    msg.twist.twist.linear.z], float)
+    def _target_cb(self, msg: PoseWithCovarianceStamped):
+        # --- 1) Position: body → NED, then add to inertial position ---
+        rel_p_b = np.array([
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z
+        ], dtype=float)
+
+        from scipy.spatial.transform import Rotation as R
+
+        R_nb = R.from_quat([self.att_q[1], self.att_q[2], self.att_q[3], self.att_q[0]])
+        
+        rel_p_n = R_nb.apply(rel_p_b)        # rotate body vector to NED
+        self.target_pos = self.pos + rel_p_n
+
+        rel_q = np.array([
+            msg.pose.pose.orientation.w,
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z
+        ], dtype=float)
+
+        self.target_rpy[0], self.target_rpy[1], self.target_rpy[2] = quat_to_eul(rel_q)
+
+        self.target_rpy[2] += self.rpy[2]
+        
         self.t_last_target = self.t_sim
+        # Here make sure you are checking the timestamp of the target msg as well
+        # and determine whether data is fresh or not
 
     def _on_status(self, msg: VehicleStatus):
         self.nav_offboard = (msg.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD)
@@ -293,8 +333,10 @@ class NavigatorNode(Node):
         #     self.trajectory_fresh = True
         #     self.get_logger().info(f"self.plan_created: {self.plan_created} ")
 
+
         # events
         target_fresh = (self.t_last_target is not None) and ((self.t_sim - self.t_last_target) <= self.mission.target.timeout)
+         
         at_takeoff = self._at_takeoff_wp()
         dist_to_target = np.linalg.norm(self.pos - self.target_pos) if (self.target_pos is not None) else 1e9
         landing_needed = (self.sm.state == NavState.FOLLOW_TARGET and
@@ -348,17 +390,24 @@ class NavigatorNode(Node):
         elif new == NavState.FOLLOW_TARGET:
             p_ref, v_ref, a_ref = self._plan_or_hold()
             # replan periodically / when far
-            if target_fresh and (dist_to_target > 0.8):
-                state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
-                target0_12 = np.hstack([
-                    self.target_pos, float(self.rpy[2]), # or face target heading if you prefer
-                    self.target_vel, 0.0,
-                    np.zeros(4)
-                ])
-                self.tm.plan_min_jerk_pose_to(self.t_sim, state0_12, target0_12, duration=None, repeat="none")
-        
+            if target_fresh:
+                if (dist_to_target > 0.5):
+                    if not self.target_plan_active:
+                        state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
+                        target0_12 = np.hstack([
+                            self.target_pos, float(self.rpy[2]), # or face target heading if you prefer
+                            np.zeros(3), 0.0,
+                            np.zeros(4)
+                        ])
+                        self.tm.plan_min_jerk_pose_to(self.t_sim, state0_12, target0_12, duration=None, repeat="none")
+                        self.target_plan_active = True
+                        self.get_logger().info(f"plan_min_jerk_pose_to State: {state0_12} | target0_12: {target0_12}")
+            else:
+                self.target_plan_active = False
+
         elif new == NavState.LANDING:
             p_ref, v_ref, a_ref = self._plan_or_hold()
+            
 
         else:
             return
@@ -379,15 +428,16 @@ class NavigatorNode(Node):
         v_cmd = np.array([v_cmd_xyz[0], v_cmd_xyz[1], v_cmd_xyz[2], v_ref[3]], float)
         a_cmd = np.array([a_ref[0],     a_ref[1],     a_ref[2],     0.0    ], float)  # or keep a_ref[3] if you compute ψ̈
 
-        # self._publish_cmd4(p_cmd, v_cmd, a_cmd)
+        self._publish_cmd4(p_cmd, v_cmd, a_cmd)
 
-        self._publish_cmd4(p_ref, v_ref, a_ref)
+        # self._publish_cmd4(p_ref, v_ref, a_ref)
 
             
 
     def _on_state_change(self, prev, state):
 
         self.get_logger().info(f"State: {prev.name} -> {state.name}")
+        self.target_plan_active = False
 
         if state in (NavState.TAKEOFF, NavState.LOITER, NavState.FOLLOW_TARGET, NavState.MISSION, NavState.HOLD, NavState.LANDING):
             self.allow_offboard_output = True # we will publish Offboard refs
@@ -403,15 +453,22 @@ class NavigatorNode(Node):
             self.limiter.reset()
 
         elif state == NavState.LOITER:
-            speed = float(self.mission.loiter.radius * self.mission.loiter.omega)
+            speed = abs(float(self.mission.speed))
+            R = float(self.mission.loiter.radius)
+            omega = (speed / max(0.05, abs(R)))
+            cw = bool(self.mission.loiter.cw) if hasattr(self.mission.loiter, "cw") else (omega < 0.0)
+            # One full lap duration (ignore angle for repeat="loop")
+            T = 2.0 * np.pi / max(1e-3, abs(omega))          # seconds
             # Build a short arc segment that loops; generator will repeat it
             state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
-            self.tm.plan_arc_by_rate_3d(
+            self.tm.plan_arc_by_radius_3d(
                 t_now=self.t_sim,
                 state0_12=state0_12,
                 speed=speed,
-                yaw_rate=self.mission.loiter.omega,   # same angular speed
-                duration=2.0*np.pi/max(1e-3, abs(self.mission.loiter.omega)),  # one full lap
+                radius=R,   
+                cw=cw,
+                #angle=float(self.mission.loiter.angle),
+                duration=T,  # one full lap
                 repeat="loop",
                 z_mode="hold",
                 yaw_mode="follow_heading",
@@ -420,8 +477,8 @@ class NavigatorNode(Node):
 
         elif state == NavState.FOLLOW_TARGET:# and target_fresh:
             target0_12 = np.hstack([
-                self.target_pos, float(self.rpy[2]), # or face target heading if you prefer
-                self.target_vel, 0.0,
+                self.target_pos, float(self.target_rpy[2]), # or face target heading if you prefer
+                np.zeros(3), 0.0,
                 np.zeros(4)
             ])
             state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
@@ -466,7 +523,6 @@ class NavigatorNode(Node):
     def _plan_or_hold(self):
         """Return plan ref; if we're in hold, return a latched hover target."""
         in_hold = (self.suppress_plan_output or self.sm.state == NavState.HOLD)
-        self.get_logger().info(f"in_hold: {in_hold}")
 
         # Rising edge: just entered hold → latch the current pose once
         if in_hold and not self._hold_mode_prev:
@@ -479,16 +535,14 @@ class NavigatorNode(Node):
 
         if in_hold:
             # Use the latched pose every tick (do NOT refresh it)
-            self.get_logger().info(f"inside if in_hold {self._hold_p4}")
             if self._hold_p4 is not None:
                 p = self._hold_p4 
             else:
                 p = self._current_p4()
-                self.get_logger().info(f"p is resetted")
 
             v = np.zeros(4, dtype=float)
             a = np.zeros(4, dtype=float)
-            return p.copy(), v, a
+            return p, v, a
 
         # Not in hold → clear the latch (so next entry will re-latch)
         self._hold_p4 = None
@@ -550,15 +604,17 @@ class NavigatorNode(Node):
         elif isinstance(m, Arc):
             R = float(m.radius)
             cw = bool(getattr(m, "cw", True))
-            # yaw rate sign: cw negative, ccw positive (convention)
+            omega = getattr(m, "yaw_rate", None) 
+            if (omega is None):
+                omega = (+1 if cw else -1) * (spd / max(0.05, R))
+            
+            # yaw rate sign: ccw negative, cw positive (convention)
             if getattr(m, "angle", None) is not None:
                 angle = float(m.angle)               # radians, signed by cw
-                omega = np.sign(-1 if cw else 1) * (spd / max(0.05, R))
                 T = abs(angle) / max(1e-3, abs(omega))
             else:
                 # if yaw_rate is provided in params, honor it and still pass speed
-                omega = float(m.yaw_rate) * (-1 if cw else 1)
-                T = max(0.1, (2.0 * np.pi) / max(1e-3, abs(omega))) * 0.25  # quarter lap default
+                T = max(0.1, (2.0 * np.pi) / max(1e-3, abs(omega)))  # quarter lap default
             segs.append({
                 "type": "arc",
                 "radius": R,
@@ -577,7 +633,7 @@ class NavigatorNode(Node):
             # Short edge
             T_short = (H - 2*Rc) / max(0.05, spd)
             # Each corner is a quarter circle
-            omega = (spd / max(0.05, Rc)) * (-1 if cw else 1)
+            omega = (spd / max(0.05, Rc)) * (+1 if cw else -1)
             T_corner = (0.5 * np.pi) / max(1e-3, abs(omega))
             for _ in range(2):
                 segs.append({"type": "straight", "speed": spd, "duration": T_long})
@@ -589,7 +645,7 @@ class NavigatorNode(Node):
             L, R, cw = float(m.straight_length), float(m.radius), bool(m.cw)
             # Two straights + two half-circles
             T_st = L / max(0.05, spd)
-            omega = (spd / max(0.05, R)) * (-1 if cw else 1)
+            omega = (spd / max(0.05, R)) * (+1 if cw else -1)
             T_half = np.pi / max(1e-3, abs(omega))
             # straight → half-circle → straight → half-circle
             segs += [
@@ -698,12 +754,6 @@ class NavigatorNode(Node):
         return t - self.t0
 
     @staticmethod
-    def _quat_to_eul(q_wxyz: np.ndarray) -> np.ndarray:
-        from scipy.spatial.transform import Rotation as R
-        r = R.from_quat([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]])
-        return r.as_euler('ZYX', degrees=False)
-
-    @staticmethod
     def _face_velocity_yaw(v: np.ndarray) -> float:
         vx, vy = float(v[0]), float(v[1])
         if abs(vx)+abs(vy) < 1e-3:
@@ -766,7 +816,7 @@ class NavigatorNode(Node):
     
     def _publish_nav_state(self):
         msg = UInt8(); 
-        msg.data = self.sm.state.value  # IDLE=1, TAKEOFF=2, LOITER,  
+        msg.data = self.sm.state.value  # IDLE=1, 
         self.nav_state_pub.publish(msg)
 
     def _publish_cmd4(self, p4, v4, a4):

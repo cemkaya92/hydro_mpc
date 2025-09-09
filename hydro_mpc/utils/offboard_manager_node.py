@@ -10,7 +10,7 @@ from px4_msgs.msg import (
     VehicleCommand, OffboardControlMode, VehicleOdometry,
     VehicleStatus, VehicleCommandAck, TrajectorySetpoint
 )
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import Float32MultiArray, String, Bool
 from std_srvs.srv import SetBool, Trigger
 from custom_offboard_msgs.msg import SafetyTrip
@@ -25,7 +25,7 @@ from hydro_mpc.utils.vehicle_command_utils import (
 from hydro_mpc.utils.param_loader import ParamLoader
 from hydro_mpc.safety.safety_monitor import SafetyMonitor
 
-
+from hydro_mpc.utils.helper_functions import quat_to_eul
 
 # ----------------------- Offboard Manager Node -----------------------
 class OffboardManagerNode(Node):
@@ -99,6 +99,13 @@ class OffboardManagerNode(Node):
             depth=1
         )
 
+        target_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, 
+            depth=4
+        )
+
         # pubs
         self.cmd_pub = self.create_publisher(VehicleCommand, vehicle_command_topic, qos)
         self.offboard_ctrl_pub = self.create_publisher(OffboardControlMode, offboard_control_topic, qos)
@@ -108,7 +115,7 @@ class OffboardManagerNode(Node):
 
         # subs
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos)
-        self.create_subscription(Odometry, target_state_topic, self._target_cb, qos)
+        self.create_subscription(PoseWithCovarianceStamped, target_state_topic, self._target_cb, target_qos)
         self.create_subscription(Float32MultiArray, control_cmd_topic, self._cmd_cb, 10)
         self.create_subscription(VehicleStatus, status_topic, self._on_status, qos)
         self.create_subscription(VehicleCommandAck, vehicle_command_ack_topic, self._on_ack, qos)
@@ -132,7 +139,7 @@ class OffboardManagerNode(Node):
         self.omega_body = np.zeros(3)
 
         self.target_pos = np.zeros(3)
-        self.target_vel = np.zeros(3)
+        self.target_rpy = np.zeros(3)
         self.have_target = False 
         self.have_odom = False
         self.last_cmd: np.ndarray | None = None
@@ -299,13 +306,18 @@ class OffboardManagerNode(Node):
             self.get_logger().info("First odom received.")
             self.have_odom = True
 
-    def _target_cb(self, msg: Odometry):
+    def _target_cb(self, msg: PoseWithCovarianceStamped):
         self.target_pos = np.array([msg.pose.pose.position.x,
                                     msg.pose.pose.position.y,
-                                    msg.pose.pose.position.z], dtype=float)
-        self.target_vel = np.array([msg.twist.twist.linear.x,
-                                    msg.twist.twist.linear.y,
-                                    msg.twist.twist.linear.z], dtype=float)
+                                    msg.pose.pose.position.z], float)
+        
+        target_att_q = np.array([msg.pose.pose.orientation.x,
+                                 msg.pose.pose.orientation.y,
+                                 msg.pose.pose.orientation.z,
+                                 msg.pose.pose.orientation.w], float)
+        
+        self.target_rpy = quat_to_eul(target_att_q)
+
         self.have_target = True
 
     def _cmd_cb(self, msg: Float32MultiArray):
@@ -412,7 +424,7 @@ class OffboardManagerNode(Node):
         safe, reason = self.mon.evaluate(
             self.t_sim, self.rpy, self.omega_body,
             self.pos, self.vel,
-            self.target_pos, self.target_vel,
+            self.target_pos, np.zeros(3),
             u_cmd
         )
 

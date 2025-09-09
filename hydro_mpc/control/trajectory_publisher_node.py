@@ -12,6 +12,8 @@ from hydro_mpc.navigation.state_machine import NavState
 
 from hydro_mpc.utils.param_loader import ParamLoader
 
+from hydro_mpc.utils.helper_functions import quat_to_eul
+
 from ament_index_python.packages import get_package_share_directory
 import os
 import math
@@ -188,9 +190,8 @@ class TrajectoryPublisherNode(Node):
         dst.acceleration = [ float(a[0]), float(a[1]), float(a[2]) ]
 
         # yaw: radians. If your yaw is ENU, flip sign for NED
-
-        dst.yaw = 0.0
-        dst.yawspeed = 0.0
+        _, _, dst.yaw  = quat_to_eul(src.quaternion)
+        dst.yawspeed = float(src.angular_velocity[2])
             
 
         # If you don’t fill fields, set them to NaN to “ignore” in PX4
@@ -211,7 +212,7 @@ class TrajectoryPublisherNode(Node):
         # Ignore position/accel by setting NaN (PX4 treats NaN as 'unused'
         # ts.position = [math.nan, math.nan, math.nan]
         # ts.acceleration = [math.nan, math.nan, math.nan]
-        ts.position = [0.0, 0.0, 0.0]
+        ts.position = [math.nan, math.nan, math.nan]
         ts.acceleration = [0.0, 0.0, 0.0]
 
         # Command zero velocity (safe hold)
@@ -219,8 +220,8 @@ class TrajectoryPublisherNode(Node):
         # ts.velocity = [math.nan, math.nan, math.nan]
 
         # Yaw/yawspeed: ignore yaw, zero yaw rate
-        ts.yaw = 0.0
-        ts.yawspeed = 0.0
+        ts.yaw = math.nan
+        ts.yawspeed = math.nan
         return ts
     
 

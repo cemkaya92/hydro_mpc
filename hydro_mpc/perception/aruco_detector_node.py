@@ -26,12 +26,12 @@ class ArucoDetectorNode(Node):
         ])
 
         self.bridge = CvBridge()
-        #self.K = None; self.dist = None
+        self.K = None; self.dist = None
         # self.K = np.array([[1.04953655e+03, 0.00000000e+00, 5.76017562e+02],[0.00000000e+00, 1.04706728e+03, 3.08646671e+02],[0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
         # self.dist = np.array([-0.49527971,  0.28734881,  0.00506379,  0.00353585, -0.05903241])
 
-        self.K = np.array([[678.70790409, 0.0, 289.10897615], [0.0, 675.90522502, 217.38481548], [0.0, 0.0, 1.0]])
-        self.dist = np.array([-0.47523875, 0.19233214, 0.00119413, 0.00175783, 0.20134492])
+        # self.K = np.array([[678.70790409, 0.0, 289.10897615], [0.0, 675.90522502, 217.38481548], [0.0, 0.0, 1.0]])
+        # self.dist = np.array([-0.47523875, 0.19233214, 0.00119413, 0.00175783, 0.20134492])
 
 
 
@@ -52,7 +52,10 @@ class ArucoDetectorNode(Node):
         qos.history = HistoryPolicy.KEEP_LAST
         qos.durability = DurabilityPolicy.VOLATILE
         # Subscriptions to EKF outputs
-        qos_rel = QoSProfile(depth=10)
+        qos_rel = QoSProfile(depth=4)
+        qos_rel.reliability = ReliabilityPolicy.BEST_EFFORT
+        qos_rel.history = HistoryPolicy.KEEP_LAST
+        qos_rel.durability = DurabilityPolicy.TRANSIENT_LOCAL
 
         qos_dbg = QoSProfile(depth=1)
         qos_dbg.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -65,10 +68,10 @@ class ArucoDetectorNode(Node):
         qos_status.durability = DurabilityPolicy.VOLATILE
 
         self.sub_img = self.create_subscription(Image, 'camera/image_raw', self.cb_img, qos)
-        #self.sub_info = self.create_subscription(CameraInfo, 'camera/camera_info', self.cb_info, qos)
+        self.sub_info = self.create_subscription(CameraInfo, 'camera/camera_info', self.cb_info, qos)
 
         self.pub_pose = self.create_publisher(PoseWithCovarianceStamped, 'perception/aruco/relative_pose', 10)
-        self.pub_dbg = self.create_publisher(Image, 'perception/debug/aruco_overlay', qos_dbg)
+        self.pub_dbg = self.create_publisher(Image, 'perception/debug/aruco_overlay', 10)
         self.status_pub = self.create_publisher(String, 'perception/aruco/status', qos_status)
         self.sub_fused = self.create_subscription(
             PoseWithCovarianceStamped, 'perception/relative_pose_fused', self.cb_fused, qos_rel)

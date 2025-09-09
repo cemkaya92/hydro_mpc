@@ -266,7 +266,7 @@ class TrajectoryGenerator:
         Concatenate 3D + yaw segments into a single reference (p(4), v(4), a(4)).
         Supported segment dicts:
           - {'type':'straight',   'speed': v,              'duration': T}     # forward along current yaw
-          - {'type':'arc',        'speed': v, 'yaw_rate': w, 'duration': T}   # constant-twist in XY
+          - {'type':'arc',        'speed': v, 'radius': R, 'duration': T, 'cw': bool}   # constant-twist in XY
           - {'type':'climb',      'rate':  z_rate,           'duration': T}   # change Z at constant rate
           - {'type':'hover_turn', 'yaw_rate': w,             'duration': T}   # spin in place
           - {'type':'hold',                               'duration': T}     # hold pose
@@ -317,32 +317,68 @@ class TrajectoryGenerator:
                 return np.array([x,y,z,psi]), np.array([xd,yd,zd,psid]), np.array([xdd,ydd,zdd,psidd])
             return _f, T
 
-        def _mk_arc(p0, v_lin, w_yaw, T, z_rate=0.0, yaw_mode="follow_heading"):
+        def _mk_arc(p0, v_lin, R, T=None, z_rate=0.0, yaw_mode="follow_heading", cw=True, angle=None):
             x0,y0,z0,psi0 = p0.tolist()
-            w = float(w_yaw)
-            v = float(v_lin)
-            R = v / w if abs(w) > 1e-9 else 1e9
+            v = float(abs(v_lin))
+            sgn = +1.0 if bool(cw) else  -1.0
+            R = float(abs(R))
+            
+            if T is not None:
+                # If T is specified, sweep either full circle or 'angle' in T
+                sweep = (2.0*np.pi if angle is None else abs(float(angle)))
+                w = sgn * sweep / max(1e-3, float(T))   # rad/s
+                v = abs(w) * R                           # ensure closure
+                T_eff = float(T)
+            else:
+                # No T: set ω from v/R and derive T (full circle or given angle)
+                w = sgn * (v / max(0.05, R))
+                sweep = (2.0*np.pi if angle is None else abs(float(angle)))
+                T_eff = sweep / max(1e-3, abs(w))
+
+            # Circle center (unicycle model)
+            xc = x0 - R * np.sin(psi0)
+            yc = y0 + R * np.cos(psi0)
+
+            def wrap_pi(a):
+                return (a + np.pi) % (2.0*np.pi) - np.pi
+            
             def _f(tau: float):
-                tt = min(max(0.0, tau), T)
-                psi = psi0 + (w * tt if yaw_mode in ("follow_heading","rate") else 0.0)
-                if abs(w) > 1e-9:
-                    x = x0 + R * (np.sin(psi) - np.sin(psi0))
-                    y = y0 - R * (np.cos(psi) - np.cos(psi0))
-                    xd = v * np.cos(psi if yaw_mode=="follow_heading" else (psi0 + w*tt))
-                    yd = v * np.sin(psi if yaw_mode=="follow_heading" else (psi0 + w*tt))
-                    xdd = -v * w * np.sin(psi)
-                    ydd =  v * w * np.cos(psi)
-                else:
-                    x = x0 + v * tt * np.cos(psi0)
-                    y = y0 + v * tt * np.sin(psi0)
-                    xd = v * np.cos(psi0); yd = v * np.sin(psi0); xdd=ydd=0.0
-                z = z0 + z_rate * tt; zd = z_rate; zdd = 0.0
-                if yaw_mode == "hold":
-                    psi = psi0; psid = 0.0; psidd = 0.0
-                else:
-                    psid = w; psidd = 0.0
-                return np.array([x,y,z,psi]), np.array([xd,yd,zd,psid]), np.array([xdd,ydd,zdd,psidd])
-            return _f, T
+                tt = float(np.clip(tau, 0.0, T_eff))
+
+                # Unwrapped path heading used for geometry/derivatives
+                heading = psi0 + w * tt
+
+                # Position from center
+                x = xc + R * np.sin(heading)
+                y = yc - R * np.cos(heading)
+
+                # Vel/acc along the tangent (match geometry exactly)
+                xd  = v * np.cos(heading)
+                yd  = v * np.sin(heading)
+                xdd = -v * w * np.sin(heading)
+                ydd =  v * w * np.cos(heading)
+
+                # Altitude
+                z   = z0 + z_rate * tt
+                zd  = z_rate
+                zdd = 0.0
+
+                # Yaw command
+                if yaw_mode == "follow_heading":
+                    yaw_cmd = wrap_pi(heading)
+                    psid    = w
+                elif yaw_mode == "rate":
+                    yaw_cmd = wrap_pi(psi0 + w * tt)
+                    psid    = w
+                else:  # "hold"
+                    yaw_cmd = wrap_pi(psi0)
+                    psid    = 0.0
+
+                return (np.array([x, y, z, yaw_cmd]),
+                        np.array([xd, yd, zd, psid]),
+                        np.array([xdd, ydd, zdd, 0.0]))
+
+            return _f, T_eff
 
         def _mk_climb(p0, z_rate, T):
             x0,y0,z0,psi0 = p0.tolist()
@@ -377,11 +413,34 @@ class TrajectoryGenerator:
                 f,T = _mk_straight(p_cur, v, T, z_rate, yaw_mode, yaw_rate)
             elif st == "arc":
                 v = float(seg["speed"])
-                w = float(seg["yaw_rate"])
                 T = float(seg["duration"])
                 z_rate = float(seg.get("z_rate", 0.0))
                 yaw_mode = seg.get("yaw_mode","follow_heading")
-                f,T = _mk_arc(p_cur, v, w, T, z_rate, yaw_mode)
+                if "radius" in seg:
+                    R = float(seg["radius"])
+                    # direction can be given as 'cw' (bool) or 'direction' in {"cw","ccw"} or 'dir_sign' in {+1,-1}
+                    if "cw" in seg:
+                        cw = bool(seg["cw"])
+                    elif "direction" in seg:
+                        cw = (str(seg["direction"]).lower() == "cw")
+                    elif "dir_sign" in seg:
+                        cw = (float(seg["dir_sign"]) < 0.0)  # negative sign → cw
+                    else:
+                        cw = True  # default
+
+                    # If duration wasn't derived upstream, you can auto-fill when angle is given:
+                    if "angle" in seg and not np.isfinite(T):
+                        omega = (v / max(0.05, abs(R))) * (+1.0 if cw else -1.0)
+                        T = abs(float(seg["angle"])) / max(1e-3, abs(omega))
+
+                    f, T = _mk_arc(p_cur, v, R, T, z_rate, yaw_mode, cw)
+
+                else:
+                    # Legacy path: use provided yaw_rate and back-compute R
+                    w = float(seg["yaw_rate"])
+                    R = (v / w) if abs(w) > 1e-9 else 1e9
+                    cw = (w < 0.0)  # keep convention consistent
+                    f, T = _mk_arc(p_cur, v, R, T, z_rate, yaw_mode, cw)
             elif st == "climb":
                 z_rate = float(seg["rate"])
                 T = float(seg["duration"])
