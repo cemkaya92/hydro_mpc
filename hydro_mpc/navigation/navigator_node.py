@@ -355,8 +355,8 @@ class NavigatorNode(Node):
                         
         #self.get_logger().info(f"State: {self.sm.state} | at_takeoff: {at_takeoff}: {np.linalg.norm(self.pos - self.mission.takeoff.waypoint)}: {np.linalg.norm(self.vel)}")
 
-        if self.start_requested:
-            self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard} ")
+        # if self.start_requested:
+        #     self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard}, mission_valid: {self.mission_valid} ")
 
         ev = NavEvents(
             have_odom=bool(self.got_odom),
