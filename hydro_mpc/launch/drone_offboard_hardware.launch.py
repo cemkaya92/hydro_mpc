@@ -49,7 +49,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument('ns_drone',   default_value=''),
         DeclareLaunchArgument('sys_id',   default_value='1'),
-        DeclareLaunchArgument('camera_ns', default_value='drone/camera'),
+        DeclareLaunchArgument('camera_ns', default_value='/camera'),
 
         DeclareLaunchArgument(
             'vehicle_param_file',
