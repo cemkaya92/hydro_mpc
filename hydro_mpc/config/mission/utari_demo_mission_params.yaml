@@ -55,8 +55,8 @@
         timeout: 0.6          # seconds without target update => target considered lost
 
       traj:
-        v_max: [1.0, 1.0, 0.5]     # max vel used by min-jerk generator [m/s]
-        a_max: [1.0, 1.0, 0.5]     # max accel used by min-jerk generator [m/s^2]
+        v_max: [0.5, 0.5, 0.25]     # max vel used by min-jerk generator [m/s]
+        a_max: [0.25, 0.25, 0.25]     # max accel used by min-jerk generator [m/s^2]
         yawrate_max: 0.5      
-        yawacc_max: 1.0
-        segment_duration: 10.0      # default segment duration [s]
+        yawacc_max: 0.5
+        segment_duration: 30.0      # default segment duration [s]

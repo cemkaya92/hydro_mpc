@@ -143,6 +143,11 @@ class NavigatorNode(Node):
 
         # target following states
         self.target_plan_active = False
+        self.ft_replan_period = 0.5       # seconds (fixed cadence)
+        self.ft_min_dist_replan = 0.3    # meters (movement trigger)
+        self.ft_max_plan_T = 2.0          # seconds (cap the horizon for snappier updates)
+        self._ft_last_plan_time = -1e9
+        self._ft_last_plan_target_p = None
 
         # ------- IO -------
         qos = QoSProfile(
@@ -389,19 +394,47 @@ class NavigatorNode(Node):
 
         elif new == NavState.FOLLOW_TARGET:
             p_ref, v_ref, a_ref = self._plan_or_hold()
-            # replan periodically / when far
+
             if target_fresh:
-                if (dist_to_target > 0.5):
-                    if not self.target_plan_active:
-                        state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
-                        target0_12 = np.hstack([
-                            self.target_pos, float(self.rpy[2]), # or face target heading if you prefer
-                            np.zeros(3), 0.0,
-                            np.zeros(4)
-                        ])
-                        self.tm.plan_min_jerk_pose_to(self.t_sim, state0_12, target0_12, duration=None, repeat="none")
-                        self.target_plan_active = True
-                        self.get_logger().info(f"plan_min_jerk_pose_to State: {state0_12} | target0_12: {target0_12}")
+                # optional small bias for smoother touchdown
+                tgt_p = self.target_pos.copy()
+                tgt_p[2] = -1.0
+
+                # Replan cadence and/or movement-based trigger
+                need_cadence = (self.t_sim - self._ft_last_plan_time) >= self.ft_replan_period
+                moved_enough = (
+                    self._ft_last_plan_target_p is None
+                    or np.linalg.norm(tgt_p - self._ft_last_plan_target_p) >= self.ft_min_dist_replan
+                )
+
+                if need_cadence or moved_enough:
+                    state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
+
+                    # Face target (or keep your own yaw policy)
+                    tgt_yaw = self.target_rpy[2] #math.atan2(tgt_p[1]-self.pos[1], tgt_p[0]-self.pos[0])
+
+                    target0_12 = np.hstack([
+                        tgt_p, tgt_yaw,
+                        np.zeros(3), 0.0,
+                        np.zeros(4)
+                    ])
+
+                    # Choose a short planning horizon so we can replan often.
+                    # If your TrajectoryManager supports an explicit duration, pass a small T,
+                    # else keep None and let the manager select, but then replan frequently.
+                    plan_T = self.ft_max_plan_T
+
+                    self.tm.plan_min_jerk_pose_to(
+                        t_now=self.t_sim,
+                        state0_12=state0_12,
+                        target0_12=target0_12,
+                        duration=plan_T,
+                        repeat="none"
+                    )
+                    self._ft_last_plan_time = self.t_sim
+                    self._ft_last_plan_target_p = tgt_p.copy()
+                    self.target_plan_active = True
+                    # self.get_logger().info(f"[FOLLOW_TARGET] replanned: dist={np.linalg.norm(tgt_p - self.pos):.2f}m")
             else:
                 self.target_plan_active = False
 
@@ -476,17 +509,11 @@ class NavigatorNode(Node):
             self.limiter.reset()
 
         elif state == NavState.FOLLOW_TARGET:
-
-            # add Xcm offset on the target altitude for a better smoother landing 
-            self.target_pos[2] -= 0.05
-
-            target0_12 = np.hstack([
-                self.target_pos, float(self.target_rpy[2]), # or face target heading if you prefer
-                np.zeros(3), 0.0,
-                np.zeros(4)
-            ])
-            state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
-            self.tm.plan_min_jerk_pose_to(self.t_sim, state0_12, target0_12, duration=None, repeat="none")
+            # NOTE: We’re not planning here anymore; planning happens each tick with cadence/trigger.
+            # Reset cadence/hysteresis on entry
+            self._ft_last_plan_time = -1e9
+            self._ft_last_plan_target_p = None
+            self.target_plan_active = False
             self.limiter.reset()
 
         elif state == NavState.LANDING:
