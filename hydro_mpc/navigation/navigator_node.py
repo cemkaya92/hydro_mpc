@@ -744,7 +744,7 @@ class NavigatorNode(Node):
             repeat="none",
         )
         self.limiter.reset()
-        self.get_logger().info(f"[Navigator] LANDING plan → ENU {p4_target} (T={T:.2f}s)")
+        self.get_logger().info(f"[Navigator] LANDING plan → NED {p4_target} (T={T:.2f}s)")
         
     
 

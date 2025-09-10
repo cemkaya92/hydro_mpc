@@ -434,7 +434,7 @@ class OffboardManagerNode(Node):
 
             return
         
-        self.get_logger().error(f"self.rpy: {self.rpy} | lim: {self.mon.limits.max_roll_pitch_deg}")
+        # self.get_logger().error(f"self.rpy: {self.rpy} | lim: {self.mon.limits.max_roll_pitch_deg}")
 
         # Unsafe -> switch to POSCTL and (optionally) disarm; then LATCH
         now_us = int(self.get_clock().now().nanoseconds / 1000)

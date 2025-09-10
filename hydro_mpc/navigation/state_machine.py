@@ -114,7 +114,7 @@ class NavStateMachine:
         elif s == NavState.MANUAL:
             # We only reach here when manual_requested just turned False
             if ev.grounded:
-                self.state = NavState.IDLE # this should be IDLE technically
+                self.state = NavState.HOLD # this should be IDLE technically
             else:
                 self.state = NavState.HOLD
 

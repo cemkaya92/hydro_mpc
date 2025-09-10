@@ -115,11 +115,6 @@ class TrajectoryPublisherNode(Node):
 
         self.allow_commands = (state not in {NavState.MANUAL, NavState.EMERGENCY})
 
-
-        if prev != state:
-            self.get_logger().info(
-                f"nav_state: {state.name} ({state.value}) | allow_commands={self.allow_commands}"
-            )
             
             
     def _traj_sub_cb(self, msg: TrajectorySetpoint6dof):
