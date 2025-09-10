@@ -475,7 +475,11 @@ class NavigatorNode(Node):
             )
             self.limiter.reset()
 
-        elif state == NavState.FOLLOW_TARGET:# and target_fresh:
+        elif state == NavState.FOLLOW_TARGET:
+
+            # add Xcm offset on the target altitude for a better smoother landing 
+            self.target_pos[2] -= 0.05
+
             target0_12 = np.hstack([
                 self.target_pos, float(self.target_rpy[2]), # or face target heading if you prefer
                 np.zeros(3), 0.0,
