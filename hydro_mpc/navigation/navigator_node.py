@@ -643,7 +643,7 @@ class NavigatorNode(Node):
         else:
             x0, y0, psi0 = float(m.common.start.x), float(m.common.start.y), float(m.common.start.psi)
 
-        z0 = float(self.pos[2])   # keep current altitude for horizontal mission tracks
+        z0 = float(self.mission.takeoff.waypoint[2])   # keep current altitude for horizontal mission tracks
 
         # Build piecewise segment list (2D), then the manager will lift to 3D/4D
         segs = []
