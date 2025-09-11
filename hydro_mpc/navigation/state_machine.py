@@ -70,10 +70,13 @@ class NavStateMachine:
                 elif ev.mission_valid:
                     self.state = NavState.MISSION
                 else:
-                    self.state = NavState.HOLD
+                    # self.state = NavState.HOLD
+                    self.state = NavState.LOITER
 
         elif s == NavState.LOITER:
-            if ev.target_fresh:
+            if not ev.offboard_ok:
+                self.state = NavState.HOLD
+            elif ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
 
         elif s == NavState.HOLD:
@@ -83,11 +86,17 @@ class NavStateMachine:
             elif not ev.offboard_ok:
                 # If Offboard stream dies, stay in HOLD (commander may also switch mode)
                 self.state = NavState.HOLD
+            # # elif (not ev.at_takeoff_wp) and ev.start_requested: 
+            # #     self.state = NavState.TAKEOFF
             elif ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
-            elif ev.mission_valid and ev.start_requested:
-                self.state = NavState.MISSION
+            elif ev.start_requested:
+                if ev.mission_valid:
+                    self.state = NavState.MISSION
+                else:
+                    self.state = NavState.LOITER
 
+                
 
         elif s == NavState.MISSION:
             if not ev.offboard_ok:

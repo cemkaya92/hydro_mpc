@@ -175,6 +175,9 @@ class TrajectoryGenerator:
           - target_state shape (12,) => full final [p v a]
         Yaw is wrapped to the nearest equivalent angle.
         """
+
+        self._segments = None       # <-- clear any piecewise plan that was active
+        
         # Current state (support legacy shapes)
         if state_current.shape[0] >= 12:
             p0 = state_current[0:4].astype(float)

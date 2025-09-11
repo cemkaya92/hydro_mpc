@@ -7,7 +7,7 @@
       common:
         repeat: "loop"             # "none" | "loop" | "pingpong"
         start:
-          use_current: true        # if false, use x/y/psi below (ENU)
+          use_current: false        # if false, use x/y/psi below (ENU)
           x: 0.0
           y: 0.0
           psi: 0.0
@@ -21,7 +21,7 @@
         # straight:
           # segment_distance: 10.0
         # arc:
-          radius: 5.0
+          radius: 3.0
           #angle: 1.57079632679
           #yaw_rate: 0.1
           cw: true
@@ -38,14 +38,14 @@
       # Quad-specific vertical/phase controls
       takeoff:
         # Waypoint to climb to (NED: z negative for up; ENU: make z positive)
-        waypoint: [0.0, 0.0, -5.0]
-        speed: 1.0            # m/s
+        waypoint: [0.0, 0.0, -3.0]
+        speed: 0.5            # m/s
 
       loiter:
         # Center of loiter (same frame as odometry)
-        center: [0.0, 0.0, -2.0]
-        radius: 1.5           # meters
-        omega: 0.5            # rad/s (angular speed around the circle)
+        center: [0.0, 0.0, -3.0]
+        radius: 3.0           # meters
+        # omega: 0.1            # rad/s (angular speed around the circle)
 
       landing:
         final_altitude: -0.1  # target z for touchdown (NED)
@@ -55,8 +55,8 @@
         timeout: 0.6          # seconds without target update => target considered lost
 
       traj:
-        v_max: [0.5, 0.5, 0.25]     # max vel used by min-jerk generator [m/s]
-        a_max: [0.25, 0.25, 0.25]     # max accel used by min-jerk generator [m/s^2]
-        yawrate_max: 0.5      
-        yawacc_max: 0.5
+        v_max: [0.25, 0.25, 0.25]     # max vel used by min-jerk generator [m/s]
+        a_max: [0.1, 0.1, 0.05]     # max accel used by min-jerk generator [m/s^2]
+        yawrate_max: 0.25      
+        yawacc_max: 0.1
         segment_duration: 30.0      # default segment duration [s]

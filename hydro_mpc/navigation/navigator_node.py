@@ -114,6 +114,8 @@ class NavigatorNode(Node):
         self.emergency_latched: bool = False
         self.trip_reason: str | None = None
 
+        self.prev_state = self.sm.state
+
         # mission bookkeeping
         self.plan_created = False
         self.trajectory_fresh = False
@@ -144,8 +146,8 @@ class NavigatorNode(Node):
         # target following states
         self.target_plan_active = False
         self.ft_replan_period = 0.5       # seconds (fixed cadence)
-        self.ft_min_dist_replan = 0.3    # meters (movement trigger)
-        self.ft_max_plan_T = 2.0          # seconds (cap the horizon for snappier updates)
+        self.ft_min_dist_replan = 0.25    # meters (movement trigger)
+        self.ft_max_plan_T = 3.0          # seconds (cap the horizon for snappier updates)
         self._ft_last_plan_time = -1e9
         self._ft_last_plan_target_p = None
 
@@ -265,8 +267,8 @@ class NavigatorNode(Node):
             self._manual_true_ticks += 1; self._manual_false_ticks = 0
         else:
             self._manual_false_ticks += 1; self._manual_true_ticks = 0
-        # require stability for 3 consecutive status messages (~60 ms @ 50 Hz)
-        self.manual_requested = (self._manual_true_ticks >= 3)
+        # require stability for 2 consecutive status messages (~60 ms @ 50 Hz)
+        self.manual_requested = (self._manual_true_ticks >= 2)
 
         #self.get_logger().info(f"self.manual_requested: {self.manual_requested}")
 
@@ -397,7 +399,6 @@ class NavigatorNode(Node):
             p_ref, v_ref, a_ref = self._plan_or_hold() 
 
         elif new == NavState.FOLLOW_TARGET:
-            p_ref, v_ref, a_ref = self._plan_or_hold()
 
             if target_fresh:
                 # optional small bias for smoother touchdown
@@ -415,7 +416,7 @@ class NavigatorNode(Node):
                     state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
 
                     # Face target (or keep your own yaw policy)
-                    tgt_yaw = self.target_rpy[2] #math.atan2(tgt_p[1]-self.pos[1], tgt_p[0]-self.pos[0])
+                    tgt_yaw = math.atan2(tgt_p[1]-self.pos[1], tgt_p[0]-self.pos[0])
 
                     target0_12 = np.hstack([
                         tgt_p, tgt_yaw,
@@ -441,6 +442,9 @@ class NavigatorNode(Node):
                     # self.get_logger().info(f"[FOLLOW_TARGET] replanned: dist={np.linalg.norm(tgt_p - self.pos):.2f}m")
             else:
                 self.target_plan_active = False
+
+            # NOW pull the reference so this tick uses the new target plan
+            p_ref, v_ref, a_ref = self._plan_or_hold()
 
         elif new == NavState.LANDING:
             p_ref, v_ref, a_ref = self._plan_or_hold()
@@ -490,25 +494,58 @@ class NavigatorNode(Node):
             self.limiter.reset()
 
         elif state == NavState.LOITER:
-            speed = abs(float(self.mission.speed))
+
             R = float(self.mission.loiter.radius)
-            omega = (speed / max(0.05, abs(R)))
-            cw = bool(self.mission.loiter.cw) if hasattr(self.mission.loiter, "cw") else (omega < 0.0)
-            # One full lap duration (ignore angle for repeat="loop")
-            T = 2.0 * np.pi / max(1e-3, abs(omega))          # seconds
-            # Build a short arc segment that loops; generator will repeat it
+            # Prefer explicit omega (rad/s) if present, else use mission speed
+            omega = getattr(self.mission.loiter, "omega", None) if hasattr(self.mission, "loiter") else None
+            if omega is not None:
+                omega = float(omega)
+                speed = abs(omega) * max(0.05, abs(R))
+                # convention in existing code: cw True when omega < 0
+                cw = (omega < 0.0)
+            else:
+                speed = abs(float(self.mission.speed))
+                cw = bool(self.mission.loiter.cw) if hasattr(self.mission.loiter, "cw") else True
+            
+            # Target altitude for loiter (z in odom frame; your yaml uses NED with z<0 for up)
+            z_target = float(self.mission.loiter.center[2])
+            
+            # Climb profile from current z -> z_target
+            dz = z_target - float(self.pos[2])
+            climb_rate = float(getattr(self.mission.takeoff, "speed", 0.5))  # reuse takeoff vertical speed
+            if abs(climb_rate) < 1e-3:
+                climb_rate = 0.25
+            climb_rate_signed = math.copysign(climb_rate, dz)
+            T_climb = abs(dz) / max(0.05, abs(climb_rate_signed))
+            
+            # One full lap duration for the orbit
+            omega_mag = speed / max(0.05, abs(R))
+            T_orbit = 2.0 * math.pi / max(1e-3, omega_mag)
+            
+            # Start from current pose/vel
             state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
-            self.tm.plan_arc_by_radius_3d(
+
+            # Build piecewise: (optional climb) -> looping arc
+            segs = []
+            # if T_climb > 0.05:
+            #     segs.append({"type": "climb", "rate": climb_rate_signed, "duration": T_climb})
+            
+            segs.append({
+                "type": "arc",
+                "speed": speed,
+                "radius": R,
+                "duration": T_orbit,     # one full lap
+                "cw": cw,
+                "yaw_mode": "follow_heading",
+                # z_rate defaults to 0.0 (hold altitude during loiter)
+            })
+
+            self.tm.plan_piecewise_track_3d(
                 t_now=self.t_sim,
                 state0_12=state0_12,
-                speed=speed,
-                radius=R,   
-                cw=cw,
-                #angle=float(self.mission.loiter.angle),
-                duration=T,  # one full lap
+                segments=segs,
                 repeat="loop",
-                z_mode="hold",
-                yaw_mode="follow_heading",
+                name="loiter_climb_then_orbit",
             )
             self.limiter.reset()
 
