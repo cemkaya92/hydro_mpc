@@ -229,6 +229,10 @@ class NavigatorNode(Node):
             self.get_logger().info("First odometry received.")
 
     def _target_cb(self, msg: PoseWithCovarianceStamped):
+         # 0) Must have odom first (so att_q is valid)
+        if not self.got_odom:
+            return
+        
         # --- 1) Position: body → NED, then add to inertial position ---
         rel_p_b = np.array([
             msg.pose.pose.position.x,
@@ -350,7 +354,7 @@ class NavigatorNode(Node):
                           target_fresh and (dist_to_target < self.mission.landing.trigger_radius) and
                           ((self.pos[2] - self.mission.landing.final_altitude) > 0.15))
         
-        landing_needed = False # hard coded / remove later after testings
+        
                         
         grounded = bool((self.pos[2] >= self.mission.landing.final_altitude - 0.05) and (np.linalg.norm(self.vel) < 0.3))
         
@@ -358,6 +362,10 @@ class NavigatorNode(Node):
                         
         #self.get_logger().info(f"State: {self.sm.state} | at_takeoff: {at_takeoff}: {np.linalg.norm(self.pos - self.mission.takeoff.waypoint)}: {np.linalg.norm(self.vel)}")
 
+
+        landing_needed = False # hard coded / remove later after testings
+        grounded = False # hard coded / remove later after testings
+        
         # if self.start_requested:
         #     self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard}, mission_valid: {self.mission_valid} ")
 
