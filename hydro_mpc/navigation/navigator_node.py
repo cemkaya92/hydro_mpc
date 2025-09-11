@@ -272,7 +272,7 @@ class NavigatorNode(Node):
         else:
             self._manual_false_ticks += 1; self._manual_true_ticks = 0
         # require stability for 2 consecutive status messages (~60 ms @ 50 Hz)
-        self.manual_requested = (self._manual_true_ticks >= 1)
+        self.manual_requested = (self._manual_true_ticks >= 3)
 
         #self.get_logger().info(f"self.manual_requested: {self.manual_requested}")
 
@@ -365,7 +365,8 @@ class NavigatorNode(Node):
 
         landing_needed = False # hard coded / remove later after testings
         grounded = False # hard coded / remove later after testings
-
+        landing_done = False # hard coded / remove later after testings
+        self.at_destination = False
         # if self.start_requested:
         #     self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard}, mission_valid: {self.mission_valid} ")
 
@@ -493,15 +494,19 @@ class NavigatorNode(Node):
             self.suppress_plan_output = False
 
         if state == NavState.TAKEOFF:
+            self._clear_active_plan()
             self._plan_takeoff()
             self.takeoff_started_sec = self.get_clock().now().seconds_nanoseconds()[0]
             self.takeoff_ok_counter = 0
 
         elif state == NavState.MISSION:
+            self._clear_active_plan()
             self._plan_mission()
             self.limiter.reset()
 
         elif state == NavState.LOITER:
+
+            self._clear_active_plan()
 
             R = float(self.mission.loiter.radius)
             # Prefer explicit omega (rad/s) if present, else use mission speed
@@ -563,6 +568,7 @@ class NavigatorNode(Node):
             self._ft_last_plan_time = -1e9
             self._ft_last_plan_target_p = None
             self.target_plan_active = False
+            self._clear_active_plan()
             self.limiter.reset()
 
         elif state == NavState.LANDING:
@@ -573,6 +579,8 @@ class NavigatorNode(Node):
             self.allow_offboard_output = True
             self.suppress_plan_output = True   # tells _plan_or_hold to hover
             self._hold_mode_prev = False       # force re-latch on entry
+            self.halt_condition = False 
+            self._clear_active_plan()
             self.limiter.reset()
 
 

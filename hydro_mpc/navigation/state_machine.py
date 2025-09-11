@@ -135,7 +135,7 @@ class NavStateMachine:
 
         elif s == NavState.LANDING:
             if ev.landing_done or ev.at_destination or ev.grounded:
-                self.state = NavState.IDLE
+                self.state = NavState.HOLD
 
         elif s == NavState.MANUAL:
             # We only reach here when manual_requested just turned False
