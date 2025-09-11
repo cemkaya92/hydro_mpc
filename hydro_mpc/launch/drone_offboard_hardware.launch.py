@@ -30,7 +30,7 @@ def generate_launch_description():
         FindPackageShare('hydro_mpc'),
         'config', 
         'perception', 
-        'aruco.yaml'
+        'aruco_exp.yaml'
     ])
     est_yaml = PathJoinSubstitution([
         FindPackageShare('hydro_mpc'),

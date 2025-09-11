@@ -348,6 +348,7 @@ class NavigatorNode(Node):
                           target_fresh and (dist_to_target < self.mission.landing.trigger_radius) and
                           ((self.pos[2] - self.mission.landing.final_altitude) > 0.15))
         
+        landing_needed = False # hard coded / remove later after testings
                         
         grounded = bool((self.pos[2] >= self.mission.landing.final_altitude - 0.05) and (np.linalg.norm(self.vel) < 0.3))
         
