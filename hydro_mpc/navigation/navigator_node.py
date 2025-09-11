@@ -502,6 +502,7 @@ class NavigatorNode(Node):
         elif state == NavState.MISSION:
             self._clear_active_plan()
             self._plan_mission()
+            self.start_requested = False # clear the flag once you are in
             self.limiter.reset()
 
         elif state == NavState.LOITER:
