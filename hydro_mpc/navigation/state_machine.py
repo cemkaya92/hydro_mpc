@@ -63,7 +63,11 @@ class NavStateMachine:
         elif s == NavState.TAKEOFF:
             # If Offboard stream drops during takeoff, hold
             if not ev.offboard_ok:
-                self.state = NavState.HOLD
+                if ev.manual_requested:
+                    self.state = NavState.MANUAL
+                else:
+                    self.state = NavState.MANUAL
+                
             elif ev.at_takeoff_wp:
                 if ev.target_fresh:
                     self.state = NavState.FOLLOW_TARGET
@@ -75,17 +79,24 @@ class NavStateMachine:
 
         elif s == NavState.LOITER:
             if not ev.offboard_ok:
-                self.state = NavState.HOLD
+                if ev.manual_requested:
+                    self.state = NavState.MANUAL
+                else:
+                    self.state = NavState.MANUAL
             elif ev.target_fresh:
                 self.state = NavState.FOLLOW_TARGET
 
         elif s == NavState.HOLD:
             # Stable hover “parking” state
-            if ev.grounded:
-                self.state = NavState.HOLD         # <- restore this
-            elif not ev.offboard_ok:
+            
+            if not ev.offboard_ok:
                 # If Offboard stream dies, stay in HOLD (commander may also switch mode)
-                self.state = NavState.HOLD
+                if ev.manual_requested:
+                    self.state = NavState.MANUAL
+                else:
+                    self.state = NavState.MANUAL
+            elif ev.grounded:
+                self.state = NavState.HOLD         # <- restore this
             # # elif (not ev.at_takeoff_wp) and ev.start_requested: 
             # #     self.state = NavState.TAKEOFF
             elif ev.target_fresh:
@@ -100,7 +111,10 @@ class NavStateMachine:
 
         elif s == NavState.MISSION:
             if not ev.offboard_ok:
-                self.state = NavState.HOLD
+                if ev.manual_requested:
+                    self.state = NavState.MANUAL
+                else:
+                    self.state = NavState.MANUAL
             elif ev.landing_needed:
                 self.state = NavState.LANDING
             elif not ev.mission_valid or ev.at_destination:
@@ -110,7 +124,10 @@ class NavStateMachine:
 
         elif s == NavState.FOLLOW_TARGET:
             if not ev.offboard_ok:
-                self.state = NavState.HOLD
+                if ev.manual_requested:
+                    self.state = NavState.MANUAL
+                else:
+                    self.state = NavState.HOLD
             elif ev.landing_needed:
                 self.state = NavState.LANDING
             elif not ev.target_fresh:

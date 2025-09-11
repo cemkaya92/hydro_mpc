@@ -272,7 +272,7 @@ class NavigatorNode(Node):
         else:
             self._manual_false_ticks += 1; self._manual_true_ticks = 0
         # require stability for 2 consecutive status messages (~60 ms @ 50 Hz)
-        self.manual_requested = (self._manual_true_ticks >= 2)
+        self.manual_requested = (self._manual_true_ticks >= 1)
 
         #self.get_logger().info(f"self.manual_requested: {self.manual_requested}")
 
@@ -365,7 +365,7 @@ class NavigatorNode(Node):
 
         landing_needed = False # hard coded / remove later after testings
         grounded = False # hard coded / remove later after testings
-        
+
         # if self.start_requested:
         #     self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard}, mission_valid: {self.mission_valid} ")
 
