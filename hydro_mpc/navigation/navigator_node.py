@@ -27,6 +27,40 @@ from hydro_mpc.utils.param_types import (
 from hydro_mpc.utils.helper_functions import quat_to_eul
 
 
+
+def _wrap_pi(a: float) -> float:
+    """Wrap angle to [-pi, pi]."""
+    return (a + math.pi) % (2.0*math.pi) - math.pi
+
+def _yaw_slerp(y0: float, y1: float, w: float) -> float:
+    """Shortest-arc blend of two yaws by weight w in [0,1]."""
+    # Weighted sum on the unit circle
+    s = (1.0 - w) * math.sin(y0) + w * math.sin(y1)
+    c = (1.0 - w) * math.cos(y0) + w * math.cos(y1)
+    return _wrap_pi(math.atan2(s, c))
+
+def _smoothstep(x, edge0, edge1):
+    """0..1 between edges (monotonic), clamped."""
+    if edge0 == edge1:
+        return float(x >= edge1)
+    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return t
+
+def _behindness_score(tgt_yaw: float, veh_xy: np.ndarray, tgt_xy: np.ndarray) -> float:
+    """
+    Returns 0..1: 1 when vehicle is *behind* the target (target is ahead of you along its heading),
+    0 when you are in front of it; smoothly varies for side positions.
+    """
+    h = np.array([math.cos(tgt_yaw), math.sin(tgt_yaw)])        # target forward (world)
+    t_vec = tgt_xy - veh_xy                                     # vehicle -> target
+    n = np.linalg.norm(t_vec)
+    if n < 1e-6:
+        return 1.0  # co-located; treat as behind to avoid NaNs
+    t_hat = t_vec / n
+    dot = float(np.dot(h, t_hat))  # >0 means target is in front of you (you're behind it)
+    return np.clip(dot, 0.0, 1.0)
+
+
 class NavigatorNode(Node):
     def __init__(self):
         super().__init__("navigator")
@@ -145,9 +179,9 @@ class NavigatorNode(Node):
 
         # target following states
         self.target_plan_active = False
-        self.ft_replan_period = 0.5       # seconds (fixed cadence)
+        self.ft_replan_period = 0.1       # seconds (fixed cadence)
         self.ft_min_dist_replan = 0.25    # meters (movement trigger)
-        self.ft_max_plan_T = 3.0          # seconds (cap the horizon for snappier updates)
+        # self.ft_max_plan_T = 3.0          # seconds (cap the horizon for snappier updates)
         self._ft_last_plan_time = -1e9
         self._ft_last_plan_target_p = None
 
@@ -245,7 +279,21 @@ class NavigatorNode(Node):
         R_nb = R.from_quat([self.att_q[1], self.att_q[2], self.att_q[3], self.att_q[0]])
         
         rel_p_n = R_nb.apply(rel_p_b)        # rotate body vector to NED
-        self.target_pos = self.pos + rel_p_n
+        target_inertial = self.pos + rel_p_n
+
+        # --------------------------
+        # BODY-FRAME HORIZONTAL OFFSET (meters)
+        # (so camera keeps the target in FOV)
+        # +X = forward, +Y = right. Keep Z unchanged.
+        dx_b = 0.2   # <-- set your desired standoff along body +X (forward)
+        dy_b = 0.0   # (optional) right-left offset
+        offset_b = np.array([dx_b, dy_b, 0.0], dtype=float)
+        offset_n = R_nb.apply(offset_b)  # rotate offset into NED
+        # Desired vehicle position = target position minus the forward offset (so target sits +dx in body frame)
+        self.target_pos = target_inertial - offset_n
+
+        # constant fixed altitude
+        self.target_pos[2] += -1.5
 
         rel_q = np.array([
             msg.pose.pose.orientation.w,
@@ -254,9 +302,32 @@ class NavigatorNode(Node):
             msg.pose.pose.orientation.z
         ], dtype=float)
 
-        self.target_rpy[0], self.target_rpy[1], self.target_rpy[2] = quat_to_eul(rel_q)
+ 
+        _, _, tyaw_rel = quat_to_eul(rel_q)             # target yaw in YOUR body frame
+        yaw_tgt = _wrap_pi(tyaw_rel + self.rpy[2])      # → world/NED yaw of target
 
-        self.target_rpy[2] += self.rpy[2]
+
+        # --- LOS yaw (vehicle -> target) in world/NED ---
+        yaw_los = math.atan2(target_inertial[1] - self.pos[1],
+                            target_inertial[0] - self.pos[0])
+        yaw_los = _wrap_pi(yaw_los)
+
+        # --- Distance-based weight (more heading alignment when close) ---
+        d = float(np.hypot(target_inertial[0] - self.pos[0],
+                        target_inertial[1] - self.pos[1]))
+        d_near, d_far = 1.0, 6.0           # tune: within 1 m rely on heading; beyond 6 m rely on LOS
+        w_close = 1.0 - _smoothstep(d, d_near, d_far)   # 1 near, 0 far
+
+        # --- Behindness gate (only favor heading if you're truly behind the target) ---
+        b = _behindness_score(yaw_tgt,
+                            veh_xy=self.pos[:2],
+                            tgt_xy=target_inertial[:2])
+
+        w = w_close * b                     # final weight 0..1
+
+        # --- Blend yaw: LOS  <->  target heading ---
+        yaw_des = _yaw_slerp(yaw_los, yaw_tgt, w)
+        self.target_rpy[2] = yaw_des
         
         self.t_last_target = self.t_sim
         # Here make sure you are checking the timestamp of the target msg as well
@@ -291,7 +362,8 @@ class NavigatorNode(Node):
         if msg.tripped:
             self.emergency_latched = True
             self.trip_reason = msg.reason
-            self.sm.reset(NavState.EMERGENCY)
+            # self.sm.reset(NavState.EMERGENCY)
+            self.sm.reset(NavState.MANUAL)
 
             # 1) Stop streaming Offboard setpoints
             if self.allow_offboard_output:
@@ -327,12 +399,7 @@ class NavigatorNode(Node):
         
         # EMERGENCY: stop sending new trajectories; hold position
         if self.emergency_latched:
-            # Hold current position & yaw
-            p4 = np.array([self.pos[0], self.pos[1], self.pos[2], float(self.rpy[2])], float)
-            v4 = np.zeros(4, float)
-            a4 = np.zeros(4, float)
-            self._publish_cmd4(p4, v4, a4)
-            self._publish_nav_state()
+            # in manual control
             return
         
         
@@ -412,7 +479,6 @@ class NavigatorNode(Node):
             if target_fresh:
                 # optional small bias for smoother touchdown
                 tgt_p = self.target_pos.copy()
-                tgt_p[2] = -1.0
 
                 # Replan cadence and/or movement-based trigger
                 need_cadence = (self.t_sim - self._ft_last_plan_time) >= self.ft_replan_period
@@ -425,18 +491,24 @@ class NavigatorNode(Node):
                     state0_12 = np.hstack([self._current_p4(), self._current_v4(), np.zeros(4)])
 
                     # Face target (or keep your own yaw policy)
-                    tgt_yaw = math.atan2(tgt_p[1]-self.pos[1], tgt_p[0]-self.pos[0])
+                    tgt_yaw = self.target_rpy[2]
 
                     target0_12 = np.hstack([
                         tgt_p, tgt_yaw,
-                        np.zeros(3), 0.0,
+                        np.zeros(4),
                         np.zeros(4)
                     ])
 
                     # Choose a short planning horizon so we can replan often.
                     # If your TrajectoryManager supports an explicit duration, pass a small T,
                     # else keep None and let the manager select, but then replan frequently.
-                    plan_T = self.ft_max_plan_T
+                    # plan_T = self.ft_max_plan_T
+
+                    # Here I am calculating the time from the straight line with constant speed
+                    dist = np.linalg.norm(tgt_p - self.pos)
+                    t_to_point = (dist / 3.0)
+
+                    plan_T = max(t_to_point, 1.0)
 
                     self.tm.plan_min_jerk_pose_to(
                         t_now=self.t_sim,
@@ -481,6 +553,10 @@ class NavigatorNode(Node):
         self._publish_cmd4(p_cmd, v_cmd, a_cmd)
 
         # self._publish_cmd4(p_ref, v_ref, a_ref)
+
+        dz_cmd = float(p_cmd[2] - self.pos[2])
+        if abs(dz_cmd) > 0.05:
+            self.get_logger().warn(f"[Z-Drift] pos.z={self.pos[2]:.2f} → cmd.z={p_cmd[2]:.2f} (Δ={dz_cmd:+.2f})")
 
             
 
@@ -660,7 +736,7 @@ class NavigatorNode(Node):
         else:
             x0, y0, psi0 = float(m.common.start.x), float(m.common.start.y), float(m.common.start.psi)
 
-        z0 = float(self.mission.takeoff.waypoint[2])   # keep current altitude for horizontal mission tracks
+        z0 = float(self.pos[2])   # keep current altitude for horizontal mission tracks
 
         # Build piecewise segment list (2D), then the manager will lift to 3D/4D
         segs = []
@@ -711,6 +787,7 @@ class NavigatorNode(Node):
                 "speed": spd,
                 "duration": T,
                 "cw": cw,
+                "z_rate": 0.0,
             })
 
         elif isinstance(m, RoundedRectangle):
