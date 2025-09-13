@@ -177,7 +177,7 @@ class OffboardManagerNode(Node):
 
         # timers
         self.keepalive_timer = self.create_timer(0.1, self._publish_offboard_keepalive) # 10 Hz
-        self.safety_timer = self.create_timer(0.1, self._safety_tick)                   # 10 Hz
+        # self.safety_timer = self.create_timer(0.1, self._safety_tick)                   # 10 Hz
         self.posctl_retry_timer = self.create_timer(0.3, self._posctl_retry_tick)       # retry leaving OFFBOARD
         # publish an initial "not tripped" state so late subscribers see a benign value
         self._publish_trip(False, "")

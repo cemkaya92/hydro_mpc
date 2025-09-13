@@ -118,9 +118,9 @@ class NavigatorNode(Node):
 
         limiter_cfg = RateLimitConfig(
             err_pos_cap=np.array([0.5, 0.5, 0.25]),   # m  (max ref jump away from current pos)
-            err_vel_cap=np.array([1.0, 1.0, 0.6]),    # m/s (max ref jump away from current vel)
+            err_vel_cap=np.array([0.5, 0.5, 0.25]),    # m/s (max ref jump away from current vel)
             ref_v_cap =np.array([0.8, 0.8, 0.5]),     # m/s (slew on position-ref per second)
-            ref_a_cap =np.array([1.5, 1.5, 1.0]),     # m/s^2 (slew on velocity-ref per second)
+            ref_a_cap =np.array([0.5, 0.5, 0.2]),     # m/s^2 (slew on velocity-ref per second)
         )
         self.limiter = SafetyRateLimiter(limiter_cfg)
 
@@ -148,7 +148,6 @@ class NavigatorNode(Node):
         self.emergency_latched: bool = False
         self.trip_reason: str | None = None
 
-        self.prev_state = self.sm.state
 
         # mission bookkeeping
         self.plan_created = False
@@ -179,11 +178,15 @@ class NavigatorNode(Node):
 
         # target following states
         self.target_plan_active = False
-        self.ft_replan_period = 0.1       # seconds (fixed cadence)
+        self.ft_replan_period = 0.05       # seconds (fixed cadence)
         self.ft_min_dist_replan = 0.25    # meters (movement trigger)
         # self.ft_max_plan_T = 3.0          # seconds (cap the horizon for snappier updates)
         self._ft_last_plan_time = -1e9
         self._ft_last_plan_target_p = None
+        self._hold_z = None          # latched altitude [z]
+        self._hold_altitude_prev = False  # tracks rising-edge into hold mode
+
+        self._tan_cam_angle = np.tan(30.0*np.pi/180.0)
 
         # ------- IO -------
         qos = QoSProfile(
@@ -222,7 +225,7 @@ class NavigatorNode(Node):
         
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos)
         self.create_subscription(PoseWithCovarianceStamped, target_topic, self._target_cb, target_qos)
-        self.create_subscription(SafetyTrip, 'safety/trip', self._on_trip, trip_qos)
+        # self.create_subscription(SafetyTrip, 'safety/trip', self._on_trip, trip_qos)
         self.create_subscription(VehicleStatus, status_topic, self._on_status, sensor_qos)
         self.create_subscription(VehicleCommandAck, command_ack_topic, self._on_ack, 10)
 
@@ -285,14 +288,18 @@ class NavigatorNode(Node):
         # BODY-FRAME HORIZONTAL OFFSET (meters)
         # (so camera keeps the target in FOV)
         # +X = forward, +Y = right. Keep Z unchanged.
-        dx_b = 0.2   # <-- set your desired standoff along body +X (forward)
+        if (self._hold_z is not None):
+            dz_b = 0.0 #- (self._hold_z - 1.5 - target_inertial[2])
+        else:
+            dz_b = 0.0 #- self._current_altitude() - target_inertial[2]
+
+        dx_b = 0.5 # dz_b * self._tan_cam_angle   # <-- set your desired standoff along body +X (forward)
         dy_b = 0.0   # (optional) right-left offset
-        offset_b = np.array([dx_b, dy_b, 0.0], dtype=float)
+        offset_b = np.array([dx_b, dy_b, dz_b], dtype=float)
         offset_n = R_nb.apply(offset_b)  # rotate offset into NED
         # Desired vehicle position = target position minus the forward offset (so target sits +dx in body frame)
         self.target_pos = target_inertial - offset_n
 
-        # constant fixed altitude
         self.target_pos[2] += -1.5
 
         rel_q = np.array([
@@ -310,6 +317,7 @@ class NavigatorNode(Node):
         # --- LOS yaw (vehicle -> target) in world/NED ---
         yaw_los = math.atan2(target_inertial[1] - self.pos[1],
                             target_inertial[0] - self.pos[0])
+    
         yaw_los = _wrap_pi(yaw_los)
 
         # --- Distance-based weight (more heading alignment when close) ---
@@ -332,6 +340,8 @@ class NavigatorNode(Node):
         self.t_last_target = self.t_sim
         # Here make sure you are checking the timestamp of the target msg as well
         # and determine whether data is fresh or not
+
+        # self.get_logger().info(f"target_inertial_pos: {target_inertial} | los_yaw {yaw_los*180/np.pi} | my_yaw {self.rpy[2]*180/np.pi} | dx_b: {dx_b}")
 
     def _on_status(self, msg: VehicleStatus):
         self.nav_offboard = (msg.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD)
@@ -480,6 +490,8 @@ class NavigatorNode(Node):
                 # optional small bias for smoother touchdown
                 tgt_p = self.target_pos.copy()
 
+                tgt_p[2] = self._hold_z
+
                 # Replan cadence and/or movement-based trigger
                 need_cadence = (self.t_sim - self._ft_last_plan_time) >= self.ft_replan_period
                 moved_enough = (
@@ -506,7 +518,7 @@ class NavigatorNode(Node):
 
                     # Here I am calculating the time from the straight line with constant speed
                     dist = np.linalg.norm(tgt_p - self.pos)
-                    t_to_point = (dist / 3.0)
+                    t_to_point = (dist / 1.0)
 
                     plan_T = max(t_to_point, 1.0)
 
@@ -517,6 +529,7 @@ class NavigatorNode(Node):
                         duration=plan_T,
                         repeat="none"
                     )
+
                     self._ft_last_plan_time = self.t_sim
                     self._ft_last_plan_target_p = tgt_p.copy()
                     self.target_plan_active = True
@@ -647,6 +660,9 @@ class NavigatorNode(Node):
             self.target_plan_active = False
             self._clear_active_plan()
             self.limiter.reset()
+            self._hold_z = self._current_altitude()
+            self.get_logger().info(f"[Navigator] Follow Target altitude latched at {self._hold_z}")
+            
 
         elif state == NavState.LANDING:
             self._plan_landing()
@@ -932,6 +948,9 @@ class NavigatorNode(Node):
     def _current_v4(self) -> np.ndarray:
         # If you don’t track ψ̇, leave it 0
         return np.array([self.vel[0], self.vel[1], self.vel[2], self.omega_body[2]], float)
+    
+    def _current_altitude(self) -> float:
+        return float(self.pos[2])
 
     def _at_takeoff_wp(self,
                    pos_xy_tol=0.35,  # m

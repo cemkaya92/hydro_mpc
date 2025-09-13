@@ -133,7 +133,20 @@ def generate_launch_description():
             namespace=ns_drone,
             arguments=['0','0','0',  '-1.570796','0','-1.570796',
                         'camera_link','camera_optical_frame'],
-        )
+        ),
+
+        Node(
+            package='hydro_mpc', 
+            executable='state_plotter_node',
+            name='state_plotter_node', 
+            namespace=ns_drone,
+            output='screen',
+            parameters=[{
+                'sitl_param_file': LaunchConfiguration('sitl_param_file'),
+                'window_sec': 30.0,
+                'plot_rate_hz': 20.0
+            }]
+        ),
 
         
 
