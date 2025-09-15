@@ -327,11 +327,18 @@ class TrajectoryGenerator:
             R = float(abs(R))
             
             if T is not None:
-                # If T is specified, sweep either full circle or 'angle' in T
-                sweep = (2.0*np.pi if angle is None else abs(float(angle)))
-                w = sgn * sweep / max(1e-3, float(T))   # rad/s
-                v = abs(w) * R                           # ensure closure
                 T_eff = float(T)
+                if angle is None:
+                    # Use the v and R you were given: sweep = |v|/R * T
+                    w = sgn * (v / max(0.05, R))
+                    sweep = abs(w) * T_eff        # allows half/quarter/etc based on T
+                    # v stays as provided   
+                else:
+                    sweep = abs(float(angle))
+                    w = sgn * sweep / max(1e-3, T_eff)
+                    v = abs(w) * R
+                          # ensure closure
+                
             else:
                 # No T: set ω from v/R and derive T (full circle or given angle)
                 w = sgn * (v / max(0.05, R))

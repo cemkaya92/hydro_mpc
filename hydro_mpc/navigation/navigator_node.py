@@ -117,9 +117,9 @@ class NavigatorNode(Node):
 
 
         limiter_cfg = RateLimitConfig(
-            err_pos_cap=np.array([0.5, 0.5, 0.25]),   # m  (max ref jump away from current pos)
-            err_vel_cap=np.array([0.5, 0.5, 0.25]),    # m/s (max ref jump away from current vel)
-            ref_v_cap =np.array([0.8, 0.8, 0.5]),     # m/s (slew on position-ref per second)
+            err_pos_cap=np.array([1.0, 1.0, 0.5]),   # m  (max ref jump away from current pos)
+            err_vel_cap=np.array([1.0, 1.0, 0.5]),    # m/s (max ref jump away from current vel)
+            ref_v_cap =np.array([1.0, 1.0, 0.5]),     # m/s (slew on position-ref per second)
             ref_a_cap =np.array([0.5, 0.5, 0.2]),     # m/s^2 (slew on velocity-ref per second)
         )
         self.limiter = SafetyRateLimiter(limiter_cfg)
@@ -408,9 +408,9 @@ class NavigatorNode(Node):
             return
         
         # EMERGENCY: stop sending new trajectories; hold position
-        if self.emergency_latched:
-            # in manual control
-            return
+        # if self.emergency_latched:
+        #     # in manual control
+        #     return
         
         
         # Ensure a plan exists (so trajectory_fresh can gate IDLE->MISSION)
@@ -444,6 +444,7 @@ class NavigatorNode(Node):
         grounded = False # hard coded / remove later after testings
         landing_done = False # hard coded / remove later after testings
         self.at_destination = False
+        target_fresh = False
         # if self.start_requested:
         #     self.get_logger().info(f"start_requested,  State: {self.sm.state}, offboard_ok: {self.nav_offboard}, mission_valid: {self.mission_valid} ")
 
@@ -567,9 +568,9 @@ class NavigatorNode(Node):
 
         # self._publish_cmd4(p_ref, v_ref, a_ref)
 
-        dz_cmd = float(p_cmd[2] - self.pos[2])
-        if abs(dz_cmd) > 0.05:
-            self.get_logger().warn(f"[Z-Drift] pos.z={self.pos[2]:.2f} → cmd.z={p_cmd[2]:.2f} (Δ={dz_cmd:+.2f})")
+        # dz_cmd = float(p_cmd[2] - self.pos[2])
+        # if abs(dz_cmd) > 0.05:
+        #     self.get_logger().warn(f"[Z-Drift] pos.z={self.pos[2]:.2f} → cmd.z={p_cmd[2]:.2f} (Δ={dz_cmd:+.2f})")
 
             
 

@@ -323,7 +323,6 @@ class OffboardManagerNode(Node):
     def _cmd_cb(self, msg: Float32MultiArray):
         self.last_cmd = np.asarray(msg.data, dtype=float)
 
-        self.last_cmd = np.asarray(msg.data, dtype=float)
     
     def _on_traj_sp(self, _: 'TrajectorySetpoint'):
         now = self._now_s()
@@ -343,7 +342,7 @@ class OffboardManagerNode(Node):
         # self.get_logger().info(f"self.offboard_blocked: {self.offboard_blocked} | self.in_manual_mode: {self.in_manual_mode} ")
 
         if allow_keepalive:
-            now_us = int(self.get_clock().now().nanoseconds / 1000)
+            now_us = self._now_us()
             offboard = OffboardControlMode()
             offboard.timestamp = now_us
             offboard.position = True

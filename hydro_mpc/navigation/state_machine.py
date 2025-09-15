@@ -45,7 +45,8 @@ class NavStateMachine:
         # Global halt: go to HOLD (air) unless EMERGENCY forces landing
         if ev.halt_condition:
             if self.state == NavState.EMERGENCY:
-                self.state = NavState.LANDING
+                # self.state = NavState.LANDING
+                self.state = NavState.MANUAL
             else:
                 self.state = NavState.HOLD
             return self.state
@@ -83,8 +84,8 @@ class NavStateMachine:
                     self.state = NavState.MANUAL
                 else:
                     self.state = NavState.MANUAL
-            elif ev.target_fresh:
-                self.state = NavState.FOLLOW_TARGET
+            # elif ev.target_fresh:
+            #     self.state = NavState.FOLLOW_TARGET
 
         elif s == NavState.HOLD:
             # Stable hover “parking” state
@@ -99,8 +100,8 @@ class NavStateMachine:
                 self.state = NavState.HOLD         # <- restore this
             # # elif (not ev.at_takeoff_wp) and ev.start_requested: 
             # #     self.state = NavState.TAKEOFF
-            elif ev.target_fresh:
-                self.state = NavState.FOLLOW_TARGET
+            # elif ev.target_fresh:
+            #     self.state = NavState.FOLLOW_TARGET
             elif ev.start_requested:
                 if ev.mission_valid:
                     self.state = NavState.MISSION
@@ -115,12 +116,12 @@ class NavStateMachine:
                     self.state = NavState.MANUAL
                 else:
                     self.state = NavState.MANUAL
-            elif ev.landing_needed:
-                self.state = NavState.LANDING
+            # elif ev.landing_needed:
+            #     self.state = NavState.LANDING
             elif not ev.mission_valid or ev.at_destination:
                 self.state = NavState.HOLD
-            elif ev.target_fresh:
-                self.state = NavState.FOLLOW_TARGET
+            # elif ev.target_fresh:
+            #     self.state = NavState.FOLLOW_TARGET
 
         elif s == NavState.FOLLOW_TARGET:
             if not ev.offboard_ok:

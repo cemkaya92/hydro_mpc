@@ -149,6 +149,28 @@ def generate_launch_description():
             prefix=venv_py
         ),
 
+        Node(
+            package='tf2_ros', 
+            executable='static_transform_publisher',
+            name='camera_tf',
+            namespace=ns_drone,
+            arguments=['0','0','0',  '-1.570796','0','-1.570796',
+                        'camera_link','camera_optical_frame'],
+        ),
+
+        Node(
+            package='hydro_mpc', 
+            executable='state_plotter_node',
+            name='state_plotter_node', 
+            namespace=ns_drone,
+            output='screen',
+            parameters=[{
+                'sitl_param_file': LaunchConfiguration('sitl_param_file'),
+                'window_sec': 50.0,
+                'plot_rate_hz': 10.0
+            }]
+        ),
+
         
 
 
